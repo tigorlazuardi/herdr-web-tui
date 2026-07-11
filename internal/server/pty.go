@@ -103,7 +103,10 @@ func serveTerminal(ctx context.Context, conn *websocket.Conn, logger *slog.Logge
 
 	readErr := readLoop(runCtx, conn, bridge, logger)
 	cancel()
-	<-outputErr
+	if runErr := <-outputErr; runErr != nil {
+		logger.ErrorContext(ctx, "pty exit", slog.String("error", runErr.Error()))
+		sendError(ctx, conn, "herdr disconnected: "+runErr.Error())
+	}
 
 	logDisconnect(ctx, logger, readErr)
 }
