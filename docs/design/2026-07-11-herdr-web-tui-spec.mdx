@@ -1,0 +1,326 @@
+---
+title: Herdr Web TUI — Design Spec
+description: A thin web layer that renders the Herdr TUI in a browser over http+ws and adds an atomic artifact promptbox for sending files into panes. Consolidated from the wayfinder map (.scratch/web-tui/).
+---
+
+# Herdr Web TUI — Design Spec
+
+Status: **design complete** (FASE 1). Derived from the wayfinder map at
+`.scratch/web-tui/` (tickets 01–07, all resolved; core mechanisms verified live
+against Herdr 0.7.3). Everything below is decided; what remains is execution.
+
+## Purpose
+
+Herdr is a tmux-like, agent-aware terminal multiplexer. Its clipboard image-paste
+only works in the `herdr --remote` thin-client; an SSH-first attach or a **browser**
+client is server-side only and **cannot read the local clipboard**. This project is
+the browser client that fills exactly that gap: render the live Herdr TUI in a browser,
+and give it a first-class way to get files (artifacts) into a pane.
+
+## Scope
+
+**In scope**
+- Render the live Herdr TUI in a browser over http + websocket.
+- An **atomic artifact promptbox**: compose text with file placeholders, upload the
+  files, and inject the resolved command into the focused pane in one shot.
+- Multi-session concurrency via URL routing.
+
+**Out of scope**
+- **Security / auth / TLS** — the gateway (nginx) handles it.
+- **True multi-tenant / per-person isolation** — not provided; Herdr is a single-OS-user
+  server with no account model (see [Multi-session](#multi-session-concurrency)).
+- **A custom TUI renderer** — we stream the real Herdr TUI, never re-draw it.
+- **Herdr plugin packaging** — this is a standalone service; "plugin" is only a name prefix.
+- **Local desktop clipboard bridging** — that is `herdr --remote`'s job.
+
+## Architecture
+
+Three thin parts over an already-running Herdr server:
+
+```
+browser (our page)                     server host (one OS user)
+┌───────────────────────────┐          ┌───────────────────────────────┐
+│ xterm.js + fit-addon      │  ws      │ pty-ws backend                │
+│ accessory key bar         │◄────────►│  spawns: herdr --session <p>  │──► Herdr
+│ artifact promptbox (pills)│          │                               │    server
+│                           │  http    │ artifact daemon               │    (sessions,
+│  POST /send (multipart)   │─────────►│  save /tmp + resolve + inject │◄───  panes,
+└───────────────────────────┘          │  herdr --session <p> pane run │    agents)
+                                        └───────────────────────────────┘
+        (nginx gateway in front: auth / TLS / size limits — out of scope)
+```
+
+1. **Frontend** — our own page hosting xterm.js. **Not** raw ttyd (its bundled page is
+   unshippable, see [Transport findings](#transport-findings)).
+2. **pty↔ws backend** — streams `herdr --session <path>` in a pty to the browser. May be
+   ttyd used purely as a backend, or our own node-pty ws (preferred, because the command
+   must vary per URL path).
+3. **Artifact daemon** — one atomic multipart endpoint: stage files to `/tmp`, resolve
+   placeholders, inject into the session's focused pane.
+
+## Stack
+
+**Backend — Go** (single static binary; deploy = one file behind nginx, no runtime install).
+**`context.Context` is the backbone**: every connection/request carries a ctx, and all
+goroutines, the pty reader, and spawned processes hang off it — so a dropped ws or an ended
+session cancels the ctx and everything tears down cleanly (no goroutine/pty/memory leaks).
+Prefer context-native libraries.
+- `net/http` (stdlib) — multipart upload endpoint, zero deps for parsing; propagate `r.Context()`.
+- `creack/pty` — spawn `herdr --session <path>` in a pty; wrap its lifecycle in the ctx (reader
+  goroutine returns on `ctx.Done()`, pty closed on cancel).
+- **`coder/websocket`** (context-native `Read(ctx)` / `Close`) — chosen over `gorilla/websocket`,
+  which uses deadlines rather than context.
+- `exec.CommandContext(ctx, …)` — call `herdr --session <p> pane run …`; the process is killed
+  when the ctx is cancelled.
+
+**Frontend — TypeScript + Svelte 5 + Vite** (no SvelteKit — no SSR/router needed;
+routing is just the URL path → session):
+- Terminal: `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-webgl` (mobile GPU perf),
+  driven **outside Svelte reactivity** — pty bytes are written straight to xterm so the
+  framework never sits in the hot render path.
+- Animations: Svelte built-in transitions (`fade`/`fly`/`scale`) + `animate:flip` for smooth
+  pill / attachment-list reordering; optional `svelte/motion` springs. No extra animation lib.
+- Icons: `lucide-svelte` (tree-shaken).
+- Lazy-load the heavy bits: `pdf.js` via dynamic `import()` only when a PDF is attached; Vite
+  code-splits the rest automatically.
+- Styling: Svelte scoped `<style>` + CSS variables for theming. No CSS framework.
+- Frontend work must load the `frontend-design` skill (the `frontend-stack` skill is
+  React-only — skip).
+
+### Build & serve (single binary)
+
+- **`//go:embed all:frontend/dist`** — the Vite build output is embedded into the Go binary, served with
+  `http.FileServer(http.FS(...))`. Keeps the "one static binary" goal (frontend ships inside it).
+- **No Vite manifest needed.** `build.manifest` is only for when the *backend* generates the HTML and must
+  look up hashed asset URLs. This is an SPA: Vite already rewrites `index.html` with the hashed asset refs at
+  build time, so serving `dist/` as-is is enough.
+- **SPA fallback routing** (required for `(domain)/(session)`): any path that is not a static asset and not an
+  API route (`/send`, `/ws`, `/clientlog`, `/config`) serves `index.html`; the frontend reads the session from
+  `location.pathname`. So `/work` returns the app, not a 404.
+- **Runtime config** is derived client-side from `location` (ws URL + session from the path) — near-zero config,
+  no manifest. A tiny `/config` JSON endpoint or an injected `window.__CFG__` is the fallback if needed.
+- **Caching**: hashed assets → long cache; `index.html` → `no-cache` so a new deploy's hashes are picked up.
+
+Rationale: the browser side is unavoidably JS (xterm.js), so the backend language is a free
+choice — Go wins on ops (one static binary, stdlib http+multipart, strong process/concurrency).
+The only perf-sensitive path is terminal rendering (xterm + ws throughput, mobile GPU), which is
+framework-agnostic; the promptbox is user-paced with trivial state, so Svelte is chosen for small
+size + first-class subtle animations, not for speed.
+
+## Frontend requirements
+
+Because we control the page (unlike raw ttyd), it must:
+
+- `<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">`
+  — makes columns track the real device width (so Herdr's mobile layout triggers at a
+  normal font) and kills touch/long-press zoom.
+- `preventDefault` on `contextmenu` over the terminal — so only Herdr's right-click menu
+  shows, not the browser's.
+- `touch-action: none` on the terminal element.
+- **fit-addon → cols/rows** propagated to the pty (SIGWINCH). Herdr picks its mobile
+  single-column layout purely from terminal width ≤ `[ui] mobile_width_threshold` (default
+  **64 cols**).
+- Preserve xterm's focusable helper textarea so **tap re-summons the soft keyboard**.
+- **Toggleable mobile accessory key bar** (Termux-style), hidden on desktop / hardware-keyboard
+  devices:
+  - **Sticky / one-shot modifiers** — tap `CTRL` → next keypress is Ctrl+key (no chording on
+    touch). Same for `ALT` / `FN`. Essential for Herdr's `ctrl+b` prefix and agent `ctrl+c` / `esc`.
+  - Default keys: `ESC` `CTRL` `ALT` `TAB` `FN` arrows.
+  - Second row / swipe: `HOME` `END` `PGUP` `PGDN` `/` `-` `|` `~` `:` `F1–F12`.
+  - Long-press → alternate-key popup. Dedicated prefix (`ctrl+b`) button is a nice-to-have.
+- **PWA manifest + `display: standalone`** (+ theme-color / iOS web-app meta) — fullscreen,
+  reclaims the URL-bar height on phones.
+- **`overscroll-behavior: none`** — no accidental pull-to-refresh.
+- **ws auto-reconnect** — Herdr panes survive detach, so reconnect = re-attach + re-render,
+  no new state.
+- *(optional)* a font +/− button using the proven `fontSize` lever to force column count.
+
+## Artifact promptbox
+
+The promptbox is a **positional template**, not "text + attachments appended". It works for
+**any pane** — an agent chatbox or a plain shell command.
+
+- **Editor = ordered segment list** (text runs + file **pills**), not string parsing. A pill is
+  an atomic chip (`contenteditable=false`) so **backspace deletes the whole pill natively**, like
+  Claude Code. Attaching a file inserts a pill at the caret; files stay local until send.
+- **Clipboard paste**: a `paste` event with a file item (e.g. a screenshot) inserts a pill
+  instead of pasting text — reproducing Herdr's remote clipboard-image-paste, in the browser.
+- **Send** → serialize segments (in order) → one atomic multipart request. Ordering is inherent
+  in pill position; there is no numbering and no "placeholder without a file" case.
+
+```
+user types:   imgcat [File 1]
+injected:     imgcat /tmp/<prefix>-<server-uid>/<uuid>.png
+```
+
+### Attachment list UI
+
+Pre-upload, pure-local (browser `File` objects), lightweight. Load the `frontend-design`
+skill before building. A **corner mime badge** distinguishes types — no per-type border:
+
+- Image → local thumbnail (object URL).
+- PDF → preview if feasible (pdf.js, optional).
+- Badge = canonical short mime: `TXT` `JPEG` `PDF` `PNG` `ZIP` `TAR/GZIP` … **unknown → no badge**.
+- No image preview → a **lucide** icon fallback.
+
+## Artifact daemon — upload endpoint
+
+**Single atomic multipart endpoint** (`multipart/form-data`). One request carries the
+promptbox **template** (ordered segments + file markers), all **files** in order, and the
+**session name** (from the route, sanitized). Atomically:
+
+1. Save each file → `/tmp/<prefix>-<server-uid>/<uuid>[.ext]` (flat; `.ext` = agent hint from
+   filename/mime). `<server-uid>` = the OS user the daemon runs as (storage is a server-side
+   concern; no gateway header, no per-person id).
+2. Resolve each marker to its saved path — **server-side; the client never sees `/tmp` paths**.
+3. `herdr --session <name> pane run <focused-pane> <resolved-text>` — text + Enter atomic —
+   into that session's focused pane.
+4. Return ok / fail. Any save-or-inject failure → **nothing is injected** (all-or-nothing).
+
+- **Consumption = strictly drop-path**: the agent/command reads the file from the path; no
+  per-type handling server-side.
+- **Size/count limits = the gateway's job** (nginx `client_max_body_size`), not the app.
+- **Cleanup**: left to the OS `/tmp` for now (no app TTL — add one only if it bites).
+
+## Multi-session concurrency
+
+Route `(herdr-tui-domain)/(path)` where `(path)` = Herdr session name (fallback `default`).
+
+- Each named session is a separate **runtime** namespace (own socket, focus, sizing), so
+  different paths never contend for view/focus (fixes the "last active client wins" resize
+  glitch of two clients on one session).
+- Cheap because `herdr --session <name>` is a global flag: the render pty spawns
+  `herdr --session <path>`, and the daemon injects with `herdr --session <path> pane run …`.
+- **This is concurrency isolation, not security.** The whole server is one OS user; anyone who
+  reaches a path has full access to every session. Real per-person isolation is out of scope.
+- **Sanitize** the path→session name (allowlist `[a-zA-Z0-9-]`, fallback `default`) — it is a
+  URL-controlled string fed to a process spawn.
+
+## Telemetry & observability
+
+Telemetry is part of "done" — it is how we reflect on and fix the issues that will surely
+surface, especially on the inject path. The goal is to trace **one flow end-to-end**.
+
+**Backend (Go)**
+- **`log/slog`** (stdlib, ctx-aware — rides the `context.Context` backbone). No dep. **JSON-first with a text
+  fallback**: `slog.NewJSONHandler` by default (greppable, machine-parseable, log-aggregator friendly);
+  `slog.NewTextHandler` via `--log-format=text` / `LOG_FORMAT=text` for human dev reading. Optional: default to
+  text when stdout is a TTY (interactive dev) and JSON otherwise (piped/systemd), with the flag overriding.
+  Optional prettier dev output via `lmittmann/tint` (colored console) — not required, stdlib TextHandler suffices.
+- **Correlation strategy** (this is a dev/ops tool, not a secrecy-sensitive business app — errors bubble
+  in full, no sanitization, plus a lookup ref):
+  - **IDs** in ctx: `session` (from route), `conn-id` (per ws connection), `req-id` (per http request).
+    Generated server-side (short, time-ordered — e.g. `rs/xid`); echo an inbound `X-Request-Id` if present.
+  - Every slog line is tagged with these, so one flow is reconstructable.
+  - **Returned to the client**: `X-Request-Id` / `X-Correlation-Id` header on **all** responses (especially
+    errors); for ws, the `conn-id` is sent on connect and embedded in any error frame.
+  - The **FE displays the full error message + the ref id** ("ref: req_xxx", copyable) so it can be quoted
+    and grepped straight against the backend logs (`req_xxx` ↔ log lines 1:1). `/clientlog` posts carry the
+    same id so FE and BE reconcile.
+- Instrument the things that break:
+  - ws lifecycle: connect / disconnect (+reason) / reconnect.
+  - pty: spawn (session, args), exit (code), resize (cols/rows).
+  - **inject path (critical)**: upload received (file count, sizes, session) → `/tmp` paths written →
+    **each `herdr … pane run` exec: command + exit code + stderr + duration** → atomic outcome ok/fail.
+  - errors everywhere, with **herdr stderr quoted exactly**.
+- **Optional OpenTelemetry**: one trace span over the inject flow (upload → save → resolve → run),
+  behind an env flag. Not forced.
+
+**Frontend (Svelte)**
+- **Failable error-feedback on every interaction** — the promptbox especially: upload/inject failure
+  (atomic all-or-nothing) and ws-disconnect state must surface clearly to the user, never fail silently.
+- **A small client logger** posts client-side errors to a backend `/clientlog` endpoint with the same
+  correlation id, so frontend and backend issues reconcile in one place.
+
+**Reflection**: the correlation id threads **FE action → backend request → herdr call**, so any single
+flow can be traced end-to-end when diagnosing a problem.
+
+## Error handling
+
+Principles: **fail loud** (surface to the user and logs), **fail atomic** (never a partial inject),
+**preserve the user's work**, and **never crash the shared server**.
+
+**Backend (Go)**
+- **Errors must identify their source.** Go has no native stack traces, so:
+  - Use a **stack-capturing errors package** that records frames at the error's origin — **`go-faster/errors`**
+    (light, `errors.Wrap` adds frames) as the default, or **`cockroachdb/errors`** if richer (stack + redaction
+    + multi-error) is wanted. Plain `fmt.Errorf("%w")` only gives a message chain, not a `file:line` origin.
+  - Enable **`slog` `AddSource: true`** so every log entry carries the `file:line` of the log site.
+  - The **`recover` middleware logs `runtime/debug.Stack()`** — panics get a full goroutine stack (native, free).
+  - Still **wrap descriptively at each boundary** (`pty spawn: %w`, `save blob: %w`) so the message chain
+    reads as a mini-trace even where a stack is absent.
+  - Net: every logged error carries **correlation id + message chain + origin stack frames + log-site source**.
+- **Atomic inject, made concrete**: save **all** files → resolve → **one** `herdr pane run`. If any save
+  fails, abort **before** any inject. The inject is the single last step, so if it fails nothing was
+  typed. A partial inject is impossible by ordering. On any failure: inject nothing, return a clear error.
+- **herdr exec failures**: capture exit code + **stderr quoted exactly** → map to a user-facing error
+  (`inject failed: <stderr>`). Never swallowed.
+- **`recover` middleware** on request paths — one bad request must not take down the server (it serves
+  other sessions) → 500 + logged.
+- **4xx vs 5xx** distinguished: invalid session name / malformed or oversized multipart = **4xx** (user
+  error), not 500.
+- **Graceful degrade**: if the Herdr server is down/unreachable, return a clear error (`herdr not
+  reachable`), never hang.
+- ws read/write error → cancel ctx → teardown; distinguish a normal close (client navigated away) from
+  an abnormal one (log the reason).
+
+**Frontend (Svelte)**
+- Every interaction is failable: an upload/inject failure shows inline in the promptbox with the **full
+  error message + the correlation ref id** (from the `X-Request-Id` header / ws error frame) and **keeps the
+  user's text + pills intact** (retry-able — atomic fail means nothing was sent). Errors bubble verbatim
+  (not a secrecy-sensitive app), so the displayed ref maps straight to the backend logs.
+- ws disconnect → a visible "reconnecting…" state + auto-reconnect, never a silent freeze.
+- Timeouts surface with a retry. **Never lose user input on error.**
+
+## Herdr control surface (reference)
+
+All CLI output is JSON — the daemon parses directly, no screen-scraping.
+
+- `herdr pane current` — the server-wide focused pane. **Focus is shared across clients**: a
+  browser navigating changes it for everyone, so "inject into the focused pane" targets what the
+  user is looking at.
+- `herdr pane run <pane> '<text>'` — inject text + Enter atomically (the inject primitive).
+- `herdr pane read <pane> --source visible` — read pane content.
+- `herdr --session <name> <subcommand>` — scope any command to a named session.
+- Terminal size is **"last active client wins"** across attached clients.
+
+Durable Herdr knowledge is captured in `.pi/skills/herdr/SKILL.md`; this repo's constraints in
+`.pi/rules/herdr-web-tui.md`.
+
+## Verified live (Herdr 0.7.3)
+
+- Inject: `pane run` types text+Enter atomically; a path with slashes/spaces survives intact.
+- Transport: ttyd serves the full Herdr TUI over LAN; a browser attaches as a normal client
+  (nested-launch block only applies inside a pane via `HERDR_ENV`).
+- Mobile: Herdr flips to single-column when cols ≤ 64 (proven by bumping font).
+- Focus: server-wide — a browser switching workspace moved `pane current` for everyone.
+- Raw ttyd page breakages (mobile-view font hack, double context menu, long-press zoom, no
+  modifier keys) → all from ttyd's uncontrolled HTML → **build our own page**.
+
+## Documentation (part of done)
+
+- **README** (repo root): what it is, quick run, the LAN caveat, link to the design doc.
+- **Operator / deploy guide**: run the Go binary; the **nginx gateway** in front (auth / TLS / `client_max_body_size`);
+  URL `(domain)/(session)` routing; env/flags (`LOG_FORMAT`, port, `/tmp` prefix, correlation header names);
+  systemd unit; note that mobile view depends on client cols (`mobile_width_threshold`).
+- **Design docs** published via the repo's **Starlight** site (scaffold with `astro-docs-setup`, author with the
+  `astro-docs-authoring` MDX dialect) + `llms.txt`. This spec is the first design doc.
+- **Endpoint reference**: `/send` (atomic multipart), `/clientlog`, and the ws stream — each with an `### I/O
+  examples` block (request/response shapes).
+- **Code docs — written for coding agents** (the future reader of this code is almost always another coding
+  agent, so doc comments are load-bearing, not decoration):
+  - **Go**: godoc on every exported function/type *and* every non-trivial unexported one; package-level `doc.go`
+    comments describing each package's role. Explain the **why**, invariants, the `context.Context` lifecycle
+    (what cancels what), error/atomicity semantics, and the correlation-id flow — not a restatement of the signature.
+  - **TS/Svelte**: tsdoc/JSDoc on key modules/functions (terminal bridge, ws client, promptbox/pill editor) at the
+    same depth — the mental model an agent needs to change the code safely (atomic inject, shared focus, teardown).
+  - Call out gotchas future agents will hit (e.g. "focused pane is server-wide", "inject is all-or-nothing", "never
+    put the framework in the xterm hot path"). Every build worker prompt must require this style.
+- **Lesson-learnt reports** via `report-authoring` as real issues surface (the telemetry/correlation story feeds these).
+
+## Build-time residuals (non-blocking)
+
+- Attachment count cap — none in app; gateway size limit governs.
+- Promptbox placement (bottom bar vs side panel) — a `frontend-design` call; leaning bottom bar.
+- pty-ws backend choice — ttyd-as-backend vs own node-pty ws (own is cleaner for per-path session).
+- Architecture diagram fidelity / final component boundaries — settle during the build.
