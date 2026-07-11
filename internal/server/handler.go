@@ -4,18 +4,25 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+
+	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrclient"
 )
 
-// New assembles the full request handler: the static/SPA file server plus
-// the correlation and recover middleware (see doc.go for the required
-// order). Later tickets add API routes (/send, /clientlog, /ws) to a mux
-// here, ahead of the static handler, so those routes take precedence over
-// the SPA fallback.
+// New assembles the full request handler: the artifact-inject API routes
+// (/send, /clientlog) plus the static/SPA file server, wrapped in the
+// correlation and recover middleware (see doc.go for the required order).
+// API routes are registered ahead of "/" on the mux so they take precedence
+// over the SPA fallback. A future ticket adds /ws the same way.
 //
 // fsys is the frontend/dist tree (fs.Sub'd from dist.FS by the caller);
-// logger is the process-wide slog.Logger built by internal/logger.
-func New(fsys fs.FS, logger *slog.Logger) http.Handler {
+// logger is the process-wide slog.Logger built by internal/logger; herdr is
+// the HerdrClient /send injects through (production: herdrclient.NewExecHerdrClient;
+// tests: a fake); stagingDir is the flat directory /send saves uploads into
+// (production: artifact.DefaultDir's result; tests: t.TempDir()).
+func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, stagingDir string) http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/send", newSendHandler(herdr, stagingDir, logger))
+	mux.Handle("/clientlog", newClientlogHandler(logger))
 	mux.Handle("/", newStaticHandler(fsys))
 
 	var h http.Handler = mux

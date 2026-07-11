@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -11,7 +12,25 @@ import (
 	"testing/fstest"
 
 	"github.com/tigorlazuardi/herdr-web-tui/internal/correlation"
+	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrclient"
 )
+
+// noopHerdrClient satisfies herdrclient.HerdrClient for tests in this file
+// that only exercise static/correlation/recover behaviour, never /send —
+// every method fails loudly if accidentally called.
+type noopHerdrClient struct{}
+
+func (noopHerdrClient) FocusedPane(context.Context, string) (*herdrclient.PaneInfo, error) {
+	panic("noopHerdrClient: unexpected call")
+}
+
+func (noopHerdrClient) PaneRun(context.Context, string, string, string) error {
+	panic("noopHerdrClient: unexpected call")
+}
+
+func (noopHerdrClient) PaneRead(context.Context, string, string, int) (string, error) {
+	panic("noopHerdrClient: unexpected call")
+}
 
 func testFS() fs.FS {
 	return fstest.MapFS{
@@ -22,7 +41,7 @@ func testFS() fs.FS {
 }
 
 func TestCorrelation_GeneratesIDWhenAbsent(t *testing.T) {
-	handler := New(testFS(), silentLogger())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -40,7 +59,7 @@ func TestCorrelation_GeneratesIDWhenAbsent(t *testing.T) {
 }
 
 func TestCorrelation_EchoesInboundID(t *testing.T) {
-	handler := New(testFS(), silentLogger())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set(correlation.HeaderRequestID, "inbound-id-123")
@@ -90,7 +109,7 @@ func TestRecover_PanicReturns500WithoutCrashing(t *testing.T) {
 }
 
 func TestStatic_ServesIndexAtRoot(t *testing.T) {
-	handler := New(testFS(), silentLogger())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -108,7 +127,7 @@ func TestStatic_ServesIndexAtRoot(t *testing.T) {
 }
 
 func TestStatic_SPAFallbackForUnknownPath(t *testing.T) {
-	handler := New(testFS(), silentLogger())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/anything/goes-here", nil)
 	rec := httptest.NewRecorder()
@@ -123,7 +142,7 @@ func TestStatic_SPAFallbackForUnknownPath(t *testing.T) {
 }
 
 func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
-	handler := New(testFS(), silentLogger())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/assets/index-abc123.js", nil)
 	rec := httptest.NewRecorder()
