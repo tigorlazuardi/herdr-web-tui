@@ -55,6 +55,9 @@ func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
 	if id := correlation.RequestID(ctx); id != "" {
 		r.AddAttrs(correlation.Attr(ctx))
 	}
+	if id := correlation.ConnID(ctx); id != "" {
+		r.AddAttrs(correlation.ConnAttr(ctx))
+	}
 	return h.Handler.Handle(ctx, r)
 }
 
