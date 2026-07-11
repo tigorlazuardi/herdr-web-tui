@@ -19,6 +19,8 @@ import (
 
 	"github.com/go-faster/errors"
 	dist "github.com/tigorlazuardi/herdr-web-tui"
+	"github.com/tigorlazuardi/herdr-web-tui/internal/artifact"
+	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrclient"
 	"github.com/tigorlazuardi/herdr-web-tui/internal/logger"
 	"github.com/tigorlazuardi/herdr-web-tui/internal/server"
 )
@@ -33,6 +35,7 @@ func main() {
 func run() error {
 	addr := flag.String("addr", envOr("ADDR", ":8080"), "address to listen on (env ADDR)")
 	logFormat := flag.String("log-format", envOr("LOG_FORMAT", ""), "log format: json, text, or empty for TTY auto-detect (env LOG_FORMAT)")
+	tmpPrefix := flag.String("tmp-prefix", envOr("TMP_PREFIX", "herdr-web-tui"), "prefix for the /tmp/<prefix>-<server-uid> artifact staging dir (env TMP_PREFIX)")
 	flag.Parse()
 
 	isTTY := isTerminal(os.Stdout)
@@ -42,7 +45,12 @@ func run() error {
 	if err != nil {
 		return errors.Wrap(err, "mount embedded frontend")
 	}
-	handler := server.New(distFS, log)
+	stagingDir, err := artifact.DefaultDir(*tmpPrefix)
+	if err != nil {
+		return errors.Wrap(err, "resolve artifact staging dir")
+	}
+	herdr := herdrclient.NewExecHerdrClient(log)
+	handler := server.New(distFS, log, herdr, stagingDir)
 
 	srv := &http.Server{
 		Addr:    *addr,
