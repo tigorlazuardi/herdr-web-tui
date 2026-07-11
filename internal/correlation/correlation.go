@@ -18,7 +18,10 @@ const (
 
 type ctxKey int
 
-const requestIDKey ctxKey = iota
+const (
+	requestIDKey ctxKey = iota
+	connIDKey
+)
 
 // NewID generates a new time-ordered, URL-safe correlation id (rs/xid).
 // Called once per inbound request by the correlation middleware; later
@@ -41,5 +44,21 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 // rather than an error.
 func RequestID(ctx context.Context) string {
 	id, _ := ctx.Value(requestIDKey).(string)
+	return id
+}
+
+// WithConnID returns a copy of ctx carrying id as the current websocket
+// connection's correlation id. Unlike the per-request id (one per HTTP
+// request), a conn id is generated once per websocket connection and lives
+// for the whole pty session — see internal/server's ws handler, the only
+// expected caller.
+func WithConnID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, connIDKey, id)
+}
+
+// ConnID returns the websocket connection id stored in ctx, or "" if none
+// was set (e.g. an HTTP request that never upgraded to a websocket).
+func ConnID(ctx context.Context) string {
+	id, _ := ctx.Value(connIDKey).(string)
 	return id
 }
