@@ -30,6 +30,19 @@ the `herdr` skill for the Herdr control surface.
   `send-text` + separate `send-keys enter` for the submit.
 - `.ext` on the blob is an agent hint; the agent consumes the file by reading the path.
 
+## Mobile layout (ticket 3)
+
+Herdr picks its single-column mobile layout purely from terminal width in
+columns — `[ui] mobile_width_threshold`, default **64 cols**. This is driven
+entirely by accurate cols reporting over the resize frame (fit-addon →
+SIGWINCH), not any Herdr API. The frontend's optional font +/− lever
+(`TerminalBridge.adjustFontSize` in `frontend/src/lib/terminal.ts`) exists
+for devices whose viewport width alone doesn't drop cols below the
+threshold — a bigger font widens each cell so fewer columns fit in the
+same viewport width, forcing mobile layout on a physically large
+phone/tablet; both +/− directions are exposed for general readability,
+not only the mobile-forcing direction.
+
 ## Open decisions (not yet locked — see `.scratch/web-tui/`)
 
 Transport tool, exact inject/compose format, `<userid>` source (auth at gateway),

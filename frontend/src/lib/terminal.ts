@@ -38,6 +38,34 @@ export interface TerminalBridge {
   readonly connected: boolean
   /** Subscribes to connection-state changes (for a "reconnecting…" banner). */
   onStateChange(cb: (state: ConnectionState) => void): () => void
+  /**
+   * Nudges xterm's font size by delta px (clamped to [8, 32]) and re-fits,
+   * which recomputes cols/rows for the new cell size and — via the
+   * existing term.onResize -> ws resize-frame wiring below — sends the
+   * pty a SIGWINCH at the new size. This is the "optional font +/- lever"
+   * from the design doc: a bigger font makes each cell wider, so *fewer*
+   * columns fit in the same viewport width — the escape hatch to force
+   * Herdr's single-column mobile layout (`mobile_width_threshold`,
+   * default 64 cols) on a physically large phone/tablet whose viewport
+   * alone doesn't measure narrow enough. Smaller font goes the other way
+   * (more columns fit); both directions are exposed since this is a
+   * general readability control, not a mobile-only trigger.
+   */
+  adjustFontSize(delta: number): void
+}
+
+const DEFAULT_FONT_SIZE = 15
+const MIN_FONT_SIZE = 8
+const MAX_FONT_SIZE = 32
+
+/**
+ * Pure clamp for the font +/- lever, split out from adjustFontSize so it's
+ * testable without constructing a Terminal/WebSocket (xterm.js needs no
+ * DOM to construct, but a real bridge still opens a socket in attach()) —
+ * see terminal.test.ts.
+ */
+export function clampFontSize(current: number, delta: number): number {
+  return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, current + delta))
 }
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
@@ -171,6 +199,13 @@ export function createTerminalBridge(): TerminalBridge {
     onStateChange(cb) {
       listeners.add(cb)
       return () => listeners.delete(cb)
+    },
+    adjustFontSize(delta: number) {
+      const current = term.options.fontSize ?? DEFAULT_FONT_SIZE
+      const next = clampFontSize(current, delta)
+      if (next === current) return
+      term.options.fontSize = next
+      fit.fit()
     },
     attach(target: HTMLElement) {
       el = target
