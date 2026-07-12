@@ -1,4 +1,5 @@
 ---
+description: herdr-web-tui project conventions — thin standalone web layer over Herdr (render live TUI over http+ws + artifact upload/inject bridge); hard constraints (thin layer only, security at gateway, not a plugin, not tmux) and the atomic promptbox contract.
 paths:
   - "**/*"
 ---

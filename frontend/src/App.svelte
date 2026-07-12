@@ -6,6 +6,7 @@
   // the server always tears down when the tab closes or navigates away.
   import { onDestroy, onMount } from 'svelte'
   import KeyBar from './components/KeyBar.svelte'
+  import Topbar from './components/Topbar.svelte'
   import { createStickyModifiers } from './lib/keybar'
   import { createTerminalBridge, type ConnectionState } from './lib/terminal'
   import Promptbox from './components/Promptbox.svelte'
@@ -20,6 +21,19 @@
   const sticky = createStickyModifiers()
   const bridge = createTerminalBridge(sticky)
 
+  // App owns the accessory key bar's visibility (mobile-ux-v2.md
+  // "Topbar"): KeyBar used to toggle itself, which meant its toggle button
+  // and this same show/hide decision lived only inside KeyBar. Now Topbar
+  // renders the toggle button and mutates this via `bind:`, KeyBar just
+  // reads it as a prop — single owner, two controlled children. Default
+  // hidden on a device with a real (fine-pointer) mouse, since a hardware
+  // keyboard is the near-certain companion of a mouse and the bar would
+  // just eat screen space; the toggle always wins over this heuristic
+  // afterwards.
+  const coarsePointer =
+    typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+  let keybarVisible = $state(coarsePointer)
+
   onMount(() => {
     const unsubscribe = bridge.onStateChange((s) => (state = s))
     bridge.attach(container)
@@ -32,26 +46,15 @@
 </script>
 
 <main>
-  {#if state !== 'open'}
-    <div class="status" role="status">
-      {state === 'connecting' ? 'Connecting…' : 'Reconnecting…'}
-    </div>
-  {/if}
-  <!-- Font +/− lever (design doc, "Frontend requirements", optional): the
-       only client-side way to force a lower column count than the device's
-       viewport gives — useful on a large-screen phone/tablet whose width
-       alone doesn't drop below Herdr's mobile_width_threshold. -->
-  <div class="font-controls" role="group" aria-label="Terminal font size">
-    <button type="button" onclick={() => bridge.adjustFontSize(-1)} aria-label="Decrease font size">
-      −
-    </button>
-    <button type="button" onclick={() => bridge.adjustFontSize(1)} aria-label="Increase font size">
-      +
-    </button>
-  </div>
+  <!-- Layout A (mobile-ux-v2.md): topbar → terminal (flex:1) → promptbox
+       → accessory keys (when visible) → soft keyboard, top to bottom, all
+       in normal flex-column flow. Nothing here is position:fixed over
+       another element in this stack — that's what let the old floating
+       key bar cover the promptbox (issue #2). -->
+  <Topbar {bridge} bind:keybarVisible connectionState={state} />
   <div class="terminal" bind:this={container}></div>
-  <KeyBar {bridge} {sticky} />
   <Promptbox />
+  <KeyBar {bridge} {sticky} visible={keybarVisible} />
 </main>
 
 <style>
@@ -67,28 +70,6 @@
     overscroll-behavior: none;
   }
 
-  .font-controls {
-    position: fixed;
-    bottom: 0.5rem;
-    right: 0.5rem;
-    z-index: 10;
-    display: flex;
-    gap: 0.25rem;
-  }
-
-  .font-controls button {
-    width: 2rem;
-    height: 2rem;
-    border: none;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.15);
-    color: #fff;
-    font: 600 1rem/1 system-ui, sans-serif;
-    /* touch-action:none on .terminal is scoped to that element only, so
-       these fixed-position buttons still need their own tap handling
-       unaffected by it — default touch-action (auto) is correct here. */
-  }
-
   .terminal {
     flex: 1;
     min-height: 0;
@@ -99,16 +80,4 @@
     touch-action: none;
   }
 
-  .status {
-    position: fixed;
-    top: 0.5rem;
-    right: 0.5rem;
-    z-index: 10;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    background: #f59e0b;
-    color: #1c1917;
-    font: 500 0.8rem/1.4 system-ui, sans-serif;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  }
 </style>

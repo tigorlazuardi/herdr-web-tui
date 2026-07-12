@@ -12,18 +12,17 @@
   // sticky is owned by App.svelte and shared with the terminal bridge's
   // term.onData (see terminal.ts's createTerminalBridge doc) so a
   // key-bar Ctrl tap and a soft-keyboard keystroke consume the same latch.
-  let { bridge, sticky }: { bridge: TerminalBridge; sticky: StickyModifiers } = $props()
+  //
+  // `visible` is a plain controlled prop (mobile-ux-v2.md "Topbar"): this
+  // component used to own its own show/hide toggle, fixed bottom-right,
+  // which collided with App.svelte's font +/- lever in the same corner
+  // (issue #3). The toggle now lives in Topbar.svelte and its state in
+  // App.svelte; KeyBar just renders (or doesn't) based on what it's told.
+  let { bridge, sticky, visible }: { bridge: TerminalBridge; sticky: StickyModifiers; visible: boolean } =
+    $props()
 
   let mods = $state(sticky.state)
   onMount(() => sticky.subscribe((s) => (mods = s)))
-
-  // Hidden by default on a device with a real (fine-pointer) mouse, since
-  // a hardware keyboard is the near-certain companion of a mouse and the
-  // bar would just eat screen space. `visible` is a manual override so
-  // the toggle button always wins over the heuristic in either direction.
-  const coarsePointer =
-    typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
-  let visible = $state(coarsePointer)
 
   // key: the logical name (SPECIAL_KEYS key, e.g. "ArrowUp") for anything
   // that isn't a literal printable character sent as-is.
@@ -70,16 +69,6 @@
   const row2Punct = ['/', '-', '|', '~', ':']
   const fKeys = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']
 </script>
-
-<button
-  class="toggle"
-  type="button"
-  aria-pressed={visible}
-  aria-label={visible ? 'Hide key bar' : 'Show key bar'}
-  onclick={() => (visible = !visible)}
->
-  {visible ? '⌨︎' : '⌨'}
-</button>
 
 {#if visible}
   <div class="keybar" role="toolbar" aria-label="Accessory key bar">
@@ -145,28 +134,16 @@
 {/if}
 
 <style>
-  .toggle {
-    position: fixed;
-    bottom: 0.5rem;
-    right: 0.5rem;
-    z-index: 11;
-    width: 2.25rem;
-    height: 2.25rem;
-    border-radius: 50%;
-    border: none;
-    background: #292524;
-    color: #e7e5e4;
-    font-size: 1.1rem;
-    line-height: 1;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-  }
-
   .keybar {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 10;
+    /* Layout A (mobile-ux-v2.md): normal flow, NOT position:fixed. This
+       bar used to float over the whole viewport bottom, which is exactly
+       what let it cover the promptbox (issue #2). As a flex item after
+       Promptbox in App.svelte's column, it naturally sits below the
+       promptbox and above the soft keyboard (index.html's
+       interactive-widget=resizes-content shrinks the layout viewport on
+       keyboard-open, so the whole column — including this bar — rides
+       above it without any extra positioning here). */
+    flex: none;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
