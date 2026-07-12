@@ -6,10 +6,14 @@
     <!-- user-scalable=no: kills touch/long-press zoom so Herdr's own
          click/tap handling isn't fought by the browser's pinch-zoom, and
          keeps columns tracking the real device width (design doc,
-         "Frontend requirements"). -->
+         "Frontend requirements").
+         interactive-widget=resizes-content: when the soft keyboard opens,
+         shrink the layout viewport (instead of the default overlay) so the
+         position:fixed bottom:0 accessory key bar rides ABOVE the keyboard
+         (Termux model) instead of hiding behind it. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content"
     />
     <!-- PWA install (ticket 3, design doc "Frontend requirements"):
          display:standalone in manifest.json drops the browser chrome so
