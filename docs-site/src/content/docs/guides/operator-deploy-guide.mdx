@@ -9,7 +9,43 @@ import { Aside } from '@astrojs/starlight/components';
 `dist.go`). It requires a running Herdr server reachable via the `herdr` CLI on
 `PATH`. Full design: [Herdr Web TUI — Design Spec](/herdr-web-tui/design/2026-07-11-herdr-web-tui-spec/).
 
-## 1. Running the binary
+## 1. Install via Nix flake
+
+The repo ships a `flake.nix` (package, dev shell, and a Home Manager module).
+It pulls `herdr` straight from `nixpkgs` (`nixos-unstable`), so no separate
+herdr flake input is needed.
+
+```bash
+nix run   github:tigorlazuardi/herdr-web-tui       # run it
+nix build github:tigorlazuardi/herdr-web-tui       # ./result/bin/herdr-web-tui
+nix develop                                        # Go + Node dev shell
+```
+
+### Home Manager module
+
+```nix
+imports = [ herdr-web-tui.homeManagerModules.default ];
+services.herdr-web-tui = {
+  enable = true;          # systemd *user* service
+  server.enable = true;   # also run a managed `herdr server` user service
+};
+```
+
+herdr package resolution: if your Home Manager provides the `programs.herdr`
+module it is auto-enabled and its `programs.herdr.package` is used; otherwise
+it falls back to `pkgs.herdr`. Set `herdrPackage` to override either way.
+
+`server.enable` (default `false`) opts into a managed `herdr server` user
+service. When on, the web-tui unit is wired `After`/`Requires`/`PartOf` that
+server so they start and stop together. When off, no server dependency is
+added and you must run the herdr server yourself.
+
+<Aside>
+The module still only speaks plain HTTP with no auth — keep it behind the nginx
+gateway (section 3) regardless of how you install it.
+</Aside>
+
+## 2. Running the binary (manual)
 
 ```bash
 go build -o herdr-web-tui ./cmd/herdr-web-tui
@@ -32,7 +68,7 @@ behind a gateway (nginx) that terminates TLS and handles access control — see
 below. Do not expose `:8080` directly to a LAN or the internet.
 </Aside>
 
-## 2. Nginx gateway (required)
+## 3. Nginx gateway (required)
 
 Nginx sits in front and owns everything security-related — this app has no
 opinion on auth or TLS:
@@ -79,7 +115,7 @@ server {
 }
 ```
 
-## 3. Environment / flags
+## 4. Environment / flags
 
 Every setting is a flag with an environment-variable fallback of the same
 name (`cmd/herdr-web-tui/main.go`, `envOr`); the flag wins if both are set.
@@ -102,7 +138,9 @@ resolved path into the pane.
 echoed back rather than replaced, so a caller/upstream proxy can supply its
 own trace id and this service will join it.
 
-## 4. Systemd unit (example)
+## 5. Systemd unit (manual, non-Nix)
+
+On Home Manager, use the flake module (section 1) instead of this unit.
 
 ```ini title="/etc/systemd/system/herdr-web-tui.service"
 [Unit]
@@ -120,7 +158,7 @@ User=herdr
 WantedBy=multi-user.target
 ```
 
-## 5. Notes
+## 6. Notes
 
 - **Mobile layout is cols-driven, not a flag.** Herdr's own TUI drops to a
   single-column mobile layout purely from terminal width in columns —
