@@ -38,6 +38,16 @@ export interface TerminalBridge {
   readonly connected: boolean
   /** Subscribes to connection-state changes (for a "reconnecting…" banner). */
   onStateChange(cb: (state: ConnectionState) => void): () => void
+  /**
+   * Sends `text` over the same FRAME_INPUT path as a physical keystroke
+   * (term.onData below) — ticket 4's accessory key bar calls this instead
+   * of forking its own ws-send logic, so a key-bar tap and a hardware
+   * keypress are indistinguishable to the server. No-op while disconnected
+   * (mirrors term.onData's own readyState guard).
+   */
+  sendInput(text: string): void
+  /** Refocuses xterm's hidden textarea, e.g. after a key-bar button steals focus. */
+  focus(): void
 }
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
@@ -171,6 +181,14 @@ export function createTerminalBridge(): TerminalBridge {
     onStateChange(cb) {
       listeners.add(cb)
       return () => listeners.delete(cb)
+    },
+    sendInput(text: string) {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(asSendable(encodeInput(text)))
+      }
+    },
+    focus() {
+      term.focus()
     },
     attach(target: HTMLElement) {
       el = target

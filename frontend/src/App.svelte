@@ -5,6 +5,7 @@
   // it a DOM element on mount and call close() on unmount so the ws/pty on
   // the server always tears down when the tab closes or navigates away.
   import { onDestroy, onMount } from 'svelte'
+  import KeyBar from './components/KeyBar.svelte'
   import { createTerminalBridge, type ConnectionState } from './lib/terminal'
 
   let container: HTMLDivElement
@@ -30,6 +31,7 @@
     </div>
   {/if}
   <div class="terminal" bind:this={container}></div>
+  <KeyBar {bridge} />
 </main>
 
 <style>
