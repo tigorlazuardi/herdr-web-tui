@@ -29,6 +29,18 @@
       {state === 'connecting' ? 'Connecting…' : 'Reconnecting…'}
     </div>
   {/if}
+  <!-- Font +/− lever (design doc, "Frontend requirements", optional): the
+       only client-side way to force a lower column count than the device's
+       viewport gives — useful on a large-screen phone/tablet whose width
+       alone doesn't drop below Herdr's mobile_width_threshold. -->
+  <div class="font-controls" role="group" aria-label="Terminal font size">
+    <button type="button" onclick={() => bridge.adjustFontSize(-1)} aria-label="Decrease font size">
+      −
+    </button>
+    <button type="button" onclick={() => bridge.adjustFontSize(1)} aria-label="Increase font size">
+      +
+    </button>
+  </div>
   <div class="terminal" bind:this={container}></div>
 </main>
 
@@ -38,6 +50,33 @@
     flex-direction: column;
     height: 100dvh;
     background: #000;
+    /* No accidental pull-to-refresh reload on a phone: a downward drag at
+       the top of the terminal must reach xterm's scrollback, not the
+       browser's native overscroll gesture (design doc, "Frontend
+       requirements"). */
+    overscroll-behavior: none;
+  }
+
+  .font-controls {
+    position: fixed;
+    bottom: 0.5rem;
+    right: 0.5rem;
+    z-index: 10;
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .font-controls button {
+    width: 2rem;
+    height: 2rem;
+    border: none;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font: 600 1rem/1 system-ui, sans-serif;
+    /* touch-action:none on .terminal is scoped to that element only, so
+       these fixed-position buttons still need their own tap handling
+       unaffected by it — default touch-action (auto) is correct here. */
   }
 
   .terminal {

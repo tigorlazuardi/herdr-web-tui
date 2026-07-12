@@ -11,6 +11,17 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
+    <!-- PWA install (ticket 3, design doc "Frontend requirements"):
+         display:standalone in manifest.json drops the browser chrome so
+         the URL bar doesn't eat rows on a phone; theme-color and the
+         apple-mobile-web-app-* trio give iOS/Android the same fullscreen,
+         home-screen-app treatment without a separate native shell. -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="application-name" content="herdr" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="herdr" />
     <title>herdr-web-tui</title>
   </head>
   <body>
