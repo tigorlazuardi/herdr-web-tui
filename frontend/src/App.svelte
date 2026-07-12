@@ -6,12 +6,18 @@
   // the server always tears down when the tab closes or navigates away.
   import { onDestroy, onMount } from 'svelte'
   import KeyBar from './components/KeyBar.svelte'
+  import { createStickyModifiers } from './lib/keybar'
   import { createTerminalBridge, type ConnectionState } from './lib/terminal'
 
   let container: HTMLDivElement
   let state = $state<ConnectionState>('connecting')
 
-  const bridge = createTerminalBridge()
+  // Shared between the terminal bridge (consulted on every soft-keyboard
+  // keystroke via term.onData) and KeyBar (toggled/read for the UI
+  // highlight) — see keybar.ts's StickyModifiers doc for why a tap-Ctrl
+  // latch must apply to BOTH input paths, not just key-bar button presses.
+  const sticky = createStickyModifiers()
+  const bridge = createTerminalBridge(sticky)
 
   onMount(() => {
     const unsubscribe = bridge.onStateChange((s) => (state = s))
@@ -31,7 +37,7 @@
     </div>
   {/if}
   <div class="terminal" bind:this={container}></div>
-  <KeyBar {bridge} />
+  <KeyBar {bridge} {sticky} />
 </main>
 
 <style>

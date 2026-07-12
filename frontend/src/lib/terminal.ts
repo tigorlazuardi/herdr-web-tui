@@ -28,6 +28,7 @@ import {
   encodeInput,
   encodeResizeFrame,
 } from './frames'
+import type { StickyModifiers } from './keybar'
 
 export interface TerminalBridge {
   /** Mounts xterm into el and starts sizing/streaming. */
@@ -77,8 +78,15 @@ function wsURL(): string {
  * since xterm needs a DOM element to open into and the resize handshake
  * (see internal/server/pty.go's readInitialSize) needs a measured
  * FitAddon.proposeDimensions() before the first frame can be sent.
+ *
+ * `sticky` is the SAME StickyModifiers instance KeyBar.svelte toggles/
+ * reads for its UI highlight — passed in rather than created here so a
+ * tap-Ctrl-then-type-c on the soft keyboard (term.onData below) and a
+ * tap-Ctrl-then-tap-C on the key bar consume the identical latch. Without
+ * this, the two input paths would each own a dead latch of their own and
+ * Ctrl/Alt/Fn taps would silently do nothing for soft-keyboard typing.
  */
-export function createTerminalBridge(): TerminalBridge {
+export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
   const term = new Terminal({
     cursorBlink: true,
     scrollback: 5000,
@@ -163,7 +171,17 @@ export function createTerminalBridge(): TerminalBridge {
 
   term.onData((data) => {
     if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(asSendable(encodeInput(data)))
+      // Every physical/soft-keyboard keystroke must consult the sticky
+      // latch (see keybar.ts's StickyModifiers doc) so a tap-Ctrl-then-
+      // type-c on the soft keyboard sends \x03, same as a key-bar tap.
+      // xterm can deliver multiple characters in one onData call (e.g. a
+      // paste); consume() is run per-character so the latch, if armed,
+      // only ever applies to the first and clears immediately after —
+      // consume() on subsequent already-unarmed chars is a no-op passthrough.
+      const out = Array.from(data)
+        .map((ch) => sticky.consume(ch))
+        .join('')
+      ws.send(asSendable(encodeInput(out)))
     }
   })
   term.onResize(({ cols, rows }) => {

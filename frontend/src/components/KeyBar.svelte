@@ -6,12 +6,14 @@
   // SAME ws path a physical keystroke uses (see terminal.ts's sendInput
   // doc comment), so nothing about the wire format is duplicated here.
   import { onDestroy, onMount } from 'svelte'
-  import { ALTERNATES, createStickyModifiers } from '../lib/keybar'
+  import { ALTERNATES, type StickyModifiers } from '../lib/keybar'
   import type { TerminalBridge } from '../lib/terminal'
 
-  let { bridge }: { bridge: TerminalBridge } = $props()
+  // sticky is owned by App.svelte and shared with the terminal bridge's
+  // term.onData (see terminal.ts's createTerminalBridge doc) so a
+  // key-bar Ctrl tap and a soft-keyboard keystroke consume the same latch.
+  let { bridge, sticky }: { bridge: TerminalBridge; sticky: StickyModifiers } = $props()
 
-  const sticky = createStickyModifiers()
   let mods = $state(sticky.state)
   onMount(() => sticky.subscribe((s) => (mods = s)))
 
@@ -28,10 +30,6 @@
   function press(key: string) {
     bridge.sendInput(sticky.consume(key))
     bridge.focus()
-  }
-
-  function pressLiteral(char: string) {
-    press(char)
   }
 
   // Long-press -> alternate character (design doc: "long-press for
