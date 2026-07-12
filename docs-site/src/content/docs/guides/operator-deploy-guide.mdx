@@ -1,0 +1,142 @@
+---
+title: Operator / deploy guide
+description: Run the herdr-web-tui binary, put nginx in front of it, and understand its env/flags, URL routing, and mobile-layout dependency.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`herdr-web-tui` is one static Go binary (the built frontend is embedded — see
+`dist.go`). It requires a running Herdr server reachable via the `herdr` CLI on
+`PATH`. Full design: [Herdr Web TUI — Design Spec](/herdr-web-tui/design/2026-07-11-herdr-web-tui-spec/).
+
+## 1. Running the binary
+
+```bash
+go build -o herdr-web-tui ./cmd/herdr-web-tui
+./herdr-web-tui
+```
+
+Listens on `:8080` by default and serves everything: the embedded frontend, the
+`/send` and `/clientlog` APIs, and the `/ws` terminal stream — one process, one
+`http.Server` (`cmd/herdr-web-tui/main.go`).
+
+Per browser tab (i.e. per `/ws` connection) the process spawns a Herdr pty via
+`herdr --session <name> …` (`internal/pty`); `/send` shells out to
+`herdr --session <name> pane current` then `herdr --session <name> pane run …`
+(`internal/herdrclient`). Both require the `herdr` binary to be reachable on
+`PATH` at runtime.
+
+<Aside type="danger" title="No built-in auth or TLS">
+This binary has zero authN/authZ and speaks plain HTTP. It is designed to sit
+behind a gateway (nginx) that terminates TLS and handles access control — see
+below. Do not expose `:8080` directly to a LAN or the internet.
+</Aside>
+
+## 2. Nginx gateway (required)
+
+Nginx sits in front and owns everything security-related — this app has no
+opinion on auth or TLS:
+
+- **TLS termination** — nginx.
+- **Auth** — nginx (basic auth, an auth subrequest, mTLS, whatever fits) — out
+  of this app's scope entirely.
+- **Reverse proxy** to `127.0.0.1:8080` (or wherever `--addr` binds).
+- **`client_max_body_size`** — the app itself accepts uploads of any size on
+  `/send` (no app-side cap); the *gateway* is the place to bound upload size.
+
+### URL routing: `(domain)/(session)`
+
+The frontend derives the Herdr session name from the first path segment of the
+URL (`frontend/src/lib/session.ts`, `sessionFromPath`) and sends it as the
+`session` query param on `/ws` and the `session` form field on `/send`. So
+`https://your-domain/work` renders and injects into the Herdr session named
+`work`; `https://your-domain/` (no path segment) falls back to the session
+named `default`.
+
+The backend re-validates whatever session name it's given
+(`internal/server/session.go`, `sanitizeSession`): only `[a-zA-Z0-9-]` is
+allowed, anything empty or non-matching silently becomes `default`. A minimal
+proxy passthrough is enough — nginx does not need to parse or rewrite the
+session out of the path itself, just forward the request through.
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name your-domain;
+
+    client_max_body_size 200m;  # upload cap; app accepts any size otherwise
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        # Required for the /ws upgrade.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+## 3. Environment / flags
+
+Every setting is a flag with an environment-variable fallback of the same
+name (`cmd/herdr-web-tui/main.go`, `envOr`); the flag wins if both are set.
+
+| Flag | Env var | Default | Meaning |
+|---|---|---|---|
+| `--addr` | `ADDR` | `:8080` | Listen address for `http.Server`. |
+| `--log-format` | `LOG_FORMAT` | `""` (auto) | `json`, `text`, or empty. Empty auto-detects: `text` on a TTY stdout, `json` otherwise (`internal/logger.New`). |
+| `--tmp-prefix` | `TMP_PREFIX` | `herdr-web-tui` | Prefix for the artifact staging directory. |
+
+**Artifact staging path.** `--tmp-prefix` (or `TMP_PREFIX`) becomes
+`os.TempDir()/<prefix>-<os-username-of-the-process>` (`internal/artifact.DefaultDir`),
+created `0700` on startup if missing. `/send` writes every uploaded file here,
+flat, as `<xid>[.ext]` (`internal/artifact.SaveFile`) before injecting the
+resolved path into the pane.
+
+**Correlation headers.** Not configurable — always `X-Request-Id` and
+`X-Correlation-Id` (`internal/correlation.HeaderRequestID` /
+`HeaderCorrelationID`), set on every response. An inbound `X-Request-Id` is
+echoed back rather than replaced, so a caller/upstream proxy can supply its
+own trace id and this service will join it.
+
+## 4. Systemd unit (example)
+
+```ini title="/etc/systemd/system/herdr-web-tui.service"
+[Unit]
+Description=Herdr Web TUI
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/herdr-web-tui --addr :8080
+Environment="LOG_FORMAT=json"
+Restart=on-failure
+User=herdr
+# herdr must be resolvable on this user's PATH.
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## 5. Notes
+
+- **Mobile layout is cols-driven, not a flag.** Herdr's own TUI drops to a
+  single-column mobile layout purely from terminal width in columns —
+  `[ui] mobile_width_threshold`, default **64 cols** (see the `herdr` skill and
+  the design spec). This app does nothing special for mobile; it just has to
+  report the browser's real terminal size accurately: the frontend sends the
+  fit-addon's measured size as the very first `/ws` frame before the pty spawns,
+  and again on every resize (`internal/server/pty.go`, `readInitialSize` /
+  `readLoop` handling `FrameResize`). A phone viewport that ends up ≤ 64 cols
+  after that first frame gets Herdr's mobile layout automatically; nothing to
+  configure server-side.
+- **`/tmp` cleanup is OS-managed.** The app never deletes files from the
+  artifact staging dir itself — no TTL, no background sweep. Rely on your
+  OS's normal `/tmp` cleanup policy (e.g. `systemd-tmpfiles`, a reboot, or a
+  cron job) if you want old uploads reaped.
+- **Requires a Herdr server reachable via the `herdr` CLI**, with JSON CLI
+  output and the `pane current` / `pane run` subcommands this service shells
+  out to (`internal/herdrclient`). Verified live against Herdr 0.7.3 — see the
+  design spec's "Verified live" section.
