@@ -6,6 +6,7 @@
   // the server always tears down when the tab closes or navigates away.
   import { onDestroy, onMount } from 'svelte'
   import { createTerminalBridge, type ConnectionState } from './lib/terminal'
+  import Promptbox from './components/Promptbox.svelte'
 
   let container: HTMLDivElement
   let state = $state<ConnectionState>('connecting')
@@ -30,6 +31,7 @@
     </div>
   {/if}
   <div class="terminal" bind:this={container}></div>
+  <Promptbox />
 </main>
 
 <style>
