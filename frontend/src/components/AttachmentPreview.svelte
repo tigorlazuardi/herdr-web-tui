@@ -6,7 +6,9 @@
    * doc: "no-preview -> lucide icon"). pdf.js (~1-2 MB with its worker) is
    * imported with a dynamic import() so it never lands in the main bundle
    * for users who attach no PDFs — see the design doc's "lazy-load the
-   * heavy bits" stack decision.
+   * heavy bits" stack decision. The thumbnail is purely decorative — the
+   * label + MimeBadge already carry the meaning — so it gets alt="" and
+   * never the filename.
    */
   import { onDestroy } from 'svelte'
   import FileIcon from '@lucide/svelte/icons/file'
@@ -67,7 +69,7 @@
 
 <div class="preview">
   {#if isImageMime(mime) && objectURL}
-    <img src={objectURL} alt={file.name} />
+    <img src={objectURL} alt="" />
   {:else if isPdfMime(mime)}
     <canvas bind:this={pdfCanvas} class:hidden={!!pdfError}></canvas>
     {#if pdfError}

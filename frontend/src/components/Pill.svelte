@@ -10,28 +10,21 @@
    */
   import MimeBadge from './MimeBadge.svelte'
   import AttachmentPreview from './AttachmentPreview.svelte'
-  import { shortName } from '../lib/filename'
 
   let {
     id,
     file,
     mime,
+    label,
     onRemove,
-  }: { id: string; file: File; mime: string; onRemove: () => void } = $props()
-
-  // mobile-ux-v2.md issue #1: short in EVERY view, not just narrow ones —
-  // the mime badge already conveys type, so the full (often 40+ char)
-  // camera/screenshot filename doesn't need to fit. 20 chars is the CSS
-  // budget below (.name max-width); kept in sync manually since one is a
-  // char count and the other a rendered width.
-  const displayName = $derived(shortName(file.name, 20))
+  }: { id: string; file: File; mime: string; label: string; onRemove: () => void } = $props()
 </script>
 
 <span class="pill" contenteditable="false" data-pill-id={id}>
   <span class="thumb-wrap">
     <AttachmentPreview {file} {mime} />
   </span>
-  <span class="name" title={file.name}>{displayName}</span>
+  <span class="name" title={file.name}>{label}</span>
   <MimeBadge {mime} />
   <button
     type="button"
@@ -70,14 +63,8 @@
   }
 
   .name {
-    /* Primary truncation is shortName() above (JS, so the extension is
-       always preserved); this is just a defensive backstop in case a
-       future caller passes a larger max. Must stay wide enough that this
-       CSS ellipsis never fires on shortName's own 20-char output — 8rem
-       was too tight and clipped the extension shortName kept, producing
-       a double-ellipsis ("Screensh…ng-name…" instead of
-       "Screensh…ng-name.jpg"); 11rem clears 20 chars at this font size
-       with margin. */
+    /* label is always a short generic word ("Image", "Archive 2", …), so
+       this ellipsis is just a defensive backstop, never expected to fire. */
     max-width: 11rem;
     overflow: hidden;
     text-overflow: ellipsis;

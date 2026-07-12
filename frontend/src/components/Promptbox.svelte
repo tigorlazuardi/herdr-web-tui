@@ -43,11 +43,14 @@
   import Copy from '@lucide/svelte/icons/copy'
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle'
   import Pill from './Pill.svelte'
+  import AttachmentPreview from './AttachmentPreview.svelte'
+  import MimeBadge from './MimeBadge.svelte'
   import type { PillSegment, Segment, TextSegment } from '../lib/segments'
   import { resolveMime } from '../lib/sniff'
   import { createHttpUploadClient, type UploadClient } from '../lib/transport'
   import { sendSegments } from '../lib/send'
   import { reportClientError } from '../lib/logger'
+  import { labelAttachments } from '../lib/attachmentLabel'
 
   interface EditorTextSegment extends TextSegment {
     readonly id: string
@@ -73,6 +76,14 @@
   let copied = $state(false)
 
   const pills = $derived(segments.filter((s): s is PillSegment => s.kind === 'pill'))
+
+  // Generic per-pill label ("Image", "Archive 2", …) — computed here rather
+  // than inside Pill.svelte because disambiguating index suffixes need the
+  // whole attachment list, not just one pill's own mime.
+  const pillLabels = $derived.by(() => {
+    const labels = labelAttachments(pills.map((p) => p.mime))
+    return new Map(pills.map((p, i) => [p.id, labels[i]]))
+  })
 
   function readSegmentsFromDOM(el: HTMLElement): EditorSegment[] {
     const pillById = new Map(pills.map((p) => [p.id, p]))
@@ -263,10 +274,25 @@
   {/if}
 
   {#if pills.length > 0}
+    <!-- Compact thumbnail-only strip — the full labeled Pill chip already
+         lives inline in the editor below, so repeating it here at 3rem
+         square just crammed a wide chip into a tiny box and jumbled the
+         text (mobile-ux-v2.md: thumbnail + mime badge, no filename). -->
     <div class="attachments">
       {#each pills as pill (pill.id)}
         <div class="attachment" animate:flip={{ duration: 180 }}>
-          <Pill id={pill.id} file={pill.file} mime={pill.mime} onRemove={() => removePill(pill.id)} />
+          <div class="attachment-thumb">
+            <AttachmentPreview file={pill.file} mime={pill.mime} />
+            <MimeBadge mime={pill.mime} />
+          </div>
+          <button
+            type="button"
+            class="attachment-remove"
+            aria-label={`Remove ${pill.file.name}`}
+            onclick={() => removePill(pill.id)}
+          >
+            ×
+          </button>
         </div>
       {/each}
     </div>
@@ -304,7 +330,13 @@
       {#each segments as seg (seg.id)}
         {#if seg.kind === 'text'}
           <span data-seg-id={seg.id}>{seg.text}</span
-          >{:else}<Pill id={seg.id} file={seg.file} mime={seg.mime} onRemove={() => removePill(seg.id)} />{/if}
+          >{:else}<Pill
+            id={seg.id}
+            file={seg.file}
+            mime={seg.mime}
+            label={pillLabels.get(seg.id) ?? 'File'}
+            onRemove={() => removePill(seg.id)}
+          />{/if}
       {/each}
     </div>
 
@@ -361,12 +393,49 @@
   .attachments {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
+    /* Generous gap + top/side padding: MimeBadge and the remove button both
+       sit in corners just outside the 3rem square (-0.35rem offset), so a
+       tight gap would let neighbouring items' corner badges touch/overlap. */
+    gap: 0.6rem;
+    padding: 0.35rem 0.35rem 0;
   }
 
   .attachment {
+    position: relative;
     width: 3rem;
     height: 3rem;
+    flex: none;
+  }
+
+  .attachment-thumb {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: var(--muted-bg, #334155);
+  }
+
+  .attachment-remove {
+    position: absolute;
+    top: -0.35rem;
+    left: -0.35rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    border: 0;
+    border-radius: 50%;
+    background: var(--badge-bg, #334155);
+    color: var(--badge-fg, #f1f5f9);
+    font: 700 0.75rem/1 system-ui, sans-serif;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+
+  .attachment-remove:hover {
+    opacity: 0.8;
   }
 
   .row {
