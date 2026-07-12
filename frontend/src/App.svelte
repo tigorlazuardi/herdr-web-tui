@@ -32,14 +32,28 @@
   // accessory bar and the on-screen keyboard end up splitting the screen
   // anyway — the exact thing this mode switch exists to prevent. Keyed on
   // inputMode rather than inlined in the toggle handler so it also fires
-  // correctly if inputMode is ever driven from somewhere else. Blurring
-  // both the terminal bridge's hidden textarea AND document.activeElement
-  // covers the two places focus (and thus the keyboard) can be sitting:
-  // the terminal itself, or the promptbox's contenteditable.
+  // correctly if inputMode is ever driven from somewhere else (and so it
+  // runs once for the initial 'promptbox' value too, keeping the textarea
+  // attribute in sync with the mode from first render). Blurring both the
+  // terminal bridge's hidden textarea AND document.activeElement covers
+  // the two places focus (and thus the keyboard) can be sitting: the
+  // terminal itself, or the promptbox's contenteditable.
+  //
+  // blur() alone is a one-shot: the terminal is mouse-first (every pane is
+  // clickable), so the very next tap on a pane re-focuses xterm's textarea
+  // and Android reopens the keyboard right after this effect dismissed it.
+  // suppressKeyboard()/restoreKeyboard() (terminal.ts) hold the invariant
+  // across taps by toggling inputmode="none" on that textarea: 'none' in
+  // keys mode keeps the terminal clickable/focusable (pane switching still
+  // works) without ever summoning the keyboard; removed in promptbox mode
+  // so tapping the terminal directly still opens the keyboard for typing.
   $effect(() => {
     if (inputMode === 'keys') {
+      bridge.suppressKeyboard()
       bridge.blur()
       ;(document.activeElement as HTMLElement | null)?.blur()
+    } else {
+      bridge.restoreKeyboard()
     }
   })
 

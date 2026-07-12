@@ -23,16 +23,18 @@ async function main() {
   await page.waitForTimeout(2500)
   await page.screenshot({ path: join(OUT, '01-baseline.png') })
 
-  // A deliberately long, realistic screenshot filename (issue #1: pill
-  // must show a short name, not this raw string).
+  // A deliberately long, realistic screenshot filename — the promptbox
+  // never displays it (attachments are generic thumbnails + a §N marker
+  // token, not filenames), this is just realistic input.
   const dir = mkdtempSync(join(tmpdir(), 'herdr-e2e-'))
   const longName = 'Screenshot_2026-07-12-21-31-45-really-long-name.jpg'
   const filePath = join(dir, longName)
   writeFileSync(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9])) // minimal jpeg-ish bytes, content unused
 
   // Default mode is promptbox (mobile-ux-v2.md exclusive-mode rework): no
-  // keybar toggle needed to see it. Attaching a file renders a pill so the
-  // promptbox screenshot isn't just an empty box.
+  // keybar toggle needed to see it. Attaching a file inserts a §1 marker
+  // token into the textarea and a thumbnail into the strip above it, so
+  // the promptbox screenshot isn't just an empty box.
   await page.setInputFiles('input[type=file]', filePath)
   await page.waitForTimeout(300)
   await page.screenshot({ path: join(OUT, '02-promptbox.png') })

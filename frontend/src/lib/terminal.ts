@@ -70,6 +70,26 @@ export interface TerminalBridge {
    * on-screen keyboard for space.
    */
   blur(): void
+  /**
+   * Sets `inputmode="none"` on xterm's hidden textarea so the browser
+   * keeps the on-screen keyboard closed even while the element is
+   * focused. The terminal is mouse-first (every pane/tab/border is
+   * clickable), so a one-shot blur() on entering keys mode isn't enough —
+   * the next tap on a pane re-focuses the textarea (xterm's own click
+   * handling) and a plain focus would normally re-summon the soft
+   * keyboard. inputmode="none" keeps that click-to-focus behaviour (so
+   * pane switching by tap still works) while telling the keyboard to stay
+   * shut. Call on entering keys mode; pair with restoreKeyboard() on the
+   * way back out.
+   */
+  suppressKeyboard(): void
+  /**
+   * Removes the `inputmode="none"` set by suppressKeyboard(), restoring
+   * the browser's default keyboard-on-focus behaviour — call on returning
+   * to promptbox mode so tapping the terminal directly still opens the
+   * soft keyboard for typing.
+   */
+  restoreKeyboard(): void
 }
 
 const DEFAULT_FONT_SIZE = 15
@@ -145,6 +165,32 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
   function setState(s: ConnectionState) {
     state = s
     for (const cb of listeners) cb(s)
+  }
+
+  /**
+   * Disables mobile IME autocorrect/autocapitalize/spellcheck on xterm's
+   * hidden textarea. A terminal consumes raw keystrokes — every byte
+   * xterm's onData below forwards goes straight to the pty — but a stock
+   * soft keyboard treats the textarea like a prose field: it silently
+   * composes and, on a misspelling, fires a delete-the-word-then-retype
+   * correction. xterm has no idea that burst wasn't typed by a human, so
+   * it forwards the deletes and the replacement as ordinary onData bytes
+   * and corrupts whatever was on the command line. These attributes are a
+   * standing hint to the browser/IME, independent of and unconditional
+   * across both inputMode ('promptbox'/'keys') states — the terminal never
+   * wants autocorrect, whereas inputmode="none" (suppressKeyboard/
+   * restoreKeyboard above) is the separate, mode-dependent toggle for
+   * whether the keyboard shows at all. Applied once per attach(), right
+   * after term.open() creates the textarea.
+   */
+  function hardenTextareaAutocorrect() {
+    const ta = term.textarea
+    if (!ta) return
+    ta.setAttribute('autocorrect', 'off')
+    ta.setAttribute('autocapitalize', 'off')
+    ta.setAttribute('autocomplete', 'off')
+    ta.setAttribute('spellcheck', 'false')
+    ta.setAttribute('enterkeyhint', 'enter')
   }
 
   function tryLoadWebgl() {
@@ -258,11 +304,18 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
     blur() {
       term.blur()
     },
+    suppressKeyboard() {
+      term.textarea?.setAttribute('inputmode', 'none')
+    },
+    restoreKeyboard() {
+      term.textarea?.removeAttribute('inputmode')
+    },
     attach(target: HTMLElement) {
       el = target
       term.open(el)
       tryLoadWebgl()
       fit.fit()
+      hardenTextareaAutocorrect()
 
       // Mouse pass-through + no browser context menu, per the design doc's
       // "Frontend requirements": Herdr is mouse-first (clickable panes/
