@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,8 +87,8 @@ func TestWS_ConnectLogsResolvedSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var logBuf bytes.Buffer
-			log := slog.New(slog.NewTextHandler(&logBuf, nil))
+			logBuf := &syncBuffer{}
+			log := slog.New(slog.NewTextHandler(logBuf, nil))
 
 			srv := httptest.NewServer(New(testFS(), log, noopHerdrClient{}, t.TempDir()))
 			defer srv.Close()
@@ -102,12 +103,41 @@ func TestWS_ConnectLogsResolvedSession(t *testing.T) {
 			}
 			defer conn.CloseNow()
 
+			// The handler logs "ws connect" from the serve goroutine after
+			// the handshake returns to us, so poll with a short bounded
+			// retry instead of racing a single read of the buffer.
 			want := "session=" + tt.wantSession
-			if !strings.Contains(logBuf.String(), "ws connect") || !strings.Contains(logBuf.String(), want) {
-				t.Fatalf("expected \"ws connect\" log line with %q, got: %s", want, logBuf.String())
+			var got string
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				got = logBuf.String()
+				if strings.Contains(got, "ws connect") && strings.Contains(got, want) {
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
 			}
+			t.Fatalf("expected \"ws connect\" log line with %q, got: %s", want, got)
 		})
 	}
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer so tests can safely read log
+// output that's written concurrently by net/http's serve goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func TestClampSize_NeverBelowMinimum(t *testing.T) {
