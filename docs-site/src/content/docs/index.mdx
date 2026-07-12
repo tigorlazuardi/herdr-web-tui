@@ -1,15 +1,11 @@
 ---
-title: Herdr Web TUI design docs
-description: Design decisions and reference docs for herdr-web-tui.
+title: Herdr Web TUI
+description: Operator and API documentation for herdr-web-tui, a thin browser frontend for a running Herdr server.
 ---
 
-Design & reference docs for **herdr-web-tui**: a thin web frontend that renders the
-Herdr TUI in a browser and adds an atomic artifact promptbox.
+**herdr-web-tui** is a thin web frontend that renders the Herdr TUI in a browser
+and adds an atomic artifact promptbox for getting files into a pane. It ships as
+one static Go binary with the frontend embedded — nothing else to deploy.
 
 - **Guides** — Nix flake install (Home Manager), running the binary, the nginx gateway, environment/flags, systemd.
 - **Reference** — the `/send`, `/clientlog`, and `/ws` endpoint contracts.
-- **Design decisions** — long-lived architecture choices.
-- **Reports** — lessons learnt from bugs, vendor quirks, incidents. See [Index of Reports](/herdr-web-tui/reports/).
-
-Working plans (`plans/**` at repo root) use the same MDX dialect but are not
-published here.

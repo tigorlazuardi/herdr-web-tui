@@ -24,15 +24,12 @@ export default defineConfig({
       },
       plugins: [
         starlightLlmsTxt({
-          demote: ['reports/**'],
           customSets: [],
         }),
       ],
       sidebar: [
         { label: 'Guides', items: [{ autogenerate: { directory: 'guides' } }] },
         { label: 'Reference', items: [{ autogenerate: { directory: 'reference' } }] },
-        { label: 'Design decisions', items: [{ autogenerate: { directory: 'design' } }] },
-        { label: 'Reports', collapsed: true, items: [{ autogenerate: { directory: 'reports' } }] },
       ],
     }),
   ],

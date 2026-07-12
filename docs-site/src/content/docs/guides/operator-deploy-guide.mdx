@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 `herdr-web-tui` is one static Go binary (the built frontend is embedded — see
 `dist.go`). It requires a running Herdr server reachable via the `herdr` CLI on
-`PATH`. Full design: [Herdr Web TUI — Design Spec](/herdr-web-tui/design/2026-07-11-herdr-web-tui-spec/).
+`PATH`.
 
 ## 1. Install via Nix flake
 
@@ -163,7 +163,7 @@ WantedBy=multi-user.target
 - **Mobile layout is cols-driven, not a flag.** Herdr's own TUI drops to a
   single-column mobile layout purely from terminal width in columns —
   `[ui] mobile_width_threshold`, default **64 cols** (see the `herdr` skill and
-  the design spec). This app does nothing special for mobile; it just has to
+  the `herdr` skill). This app does nothing special for mobile; it just has to
   report the browser's real terminal size accurately: the frontend sends the
   fit-addon's measured size as the very first `/ws` frame before the pty spawns,
   and again on every resize (`internal/server/pty.go`, `readInitialSize` /
@@ -176,5 +176,4 @@ WantedBy=multi-user.target
   cron job) if you want old uploads reaped.
 - **Requires a Herdr server reachable via the `herdr` CLI**, with JSON CLI
   output and the `pane current` / `pane run` subcommands this service shells
-  out to (`internal/herdrclient`). Verified live against Herdr 0.7.3 — see the
-  design spec's "Verified live" section.
+  out to (`internal/herdrclient`). Verified live against Herdr 0.7.3.
