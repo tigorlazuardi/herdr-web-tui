@@ -29,6 +29,7 @@ import {
   encodeResizeFrame,
 } from './frames'
 import { sessionFromPath } from './session'
+import type { StickyModifiers } from './keybar'
 
 export interface TerminalBridge {
   /** Mounts xterm into el and starts sizing/streaming. */
@@ -53,6 +54,16 @@ export interface TerminalBridge {
    * general readability control, not a mobile-only trigger.
    */
   adjustFontSize(delta: number): void
+  /**
+   * Sends `text` over the same FRAME_INPUT path as a physical keystroke
+   * (term.onData below) — ticket 4's accessory key bar calls this instead
+   * of forking its own ws-send logic, so a key-bar tap and a hardware
+   * keypress are indistinguishable to the server. No-op while disconnected
+   * (mirrors term.onData's own readyState guard).
+   */
+  sendInput(text: string): void
+  /** Refocuses xterm's hidden textarea, e.g. after a key-bar button steals focus. */
+  focus(): void
 }
 
 const DEFAULT_FONT_SIZE = 15
@@ -101,8 +112,15 @@ function wsURL(): string {
  * since xterm needs a DOM element to open into and the resize handshake
  * (see internal/server/pty.go's readInitialSize) needs a measured
  * FitAddon.proposeDimensions() before the first frame can be sent.
+ *
+ * `sticky` is the SAME StickyModifiers instance KeyBar.svelte toggles/
+ * reads for its UI highlight — passed in rather than created here so a
+ * tap-Ctrl-then-type-c on the soft keyboard (term.onData below) and a
+ * tap-Ctrl-then-tap-C on the key bar consume the identical latch. Without
+ * this, the two input paths would each own a dead latch of their own and
+ * Ctrl/Alt/Fn taps would silently do nothing for soft-keyboard typing.
  */
-export function createTerminalBridge(): TerminalBridge {
+export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
   const term = new Terminal({
     cursorBlink: true,
     scrollback: 5000,
@@ -187,7 +205,17 @@ export function createTerminalBridge(): TerminalBridge {
 
   term.onData((data) => {
     if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(asSendable(encodeInput(data)))
+      // Every physical/soft-keyboard keystroke must consult the sticky
+      // latch (see keybar.ts's StickyModifiers doc) so a tap-Ctrl-then-
+      // type-c on the soft keyboard sends \x03, same as a key-bar tap.
+      // xterm can deliver multiple characters in one onData call (e.g. a
+      // paste); consume() is run per-character so the latch, if armed,
+      // only ever applies to the first and clears immediately after —
+      // consume() on subsequent already-unarmed chars is a no-op passthrough.
+      const out = Array.from(data)
+        .map((ch) => sticky.consume(ch))
+        .join('')
+      ws.send(asSendable(encodeInput(out)))
     }
   })
   term.onResize(({ cols, rows }) => {
@@ -212,6 +240,14 @@ export function createTerminalBridge(): TerminalBridge {
       if (next === current) return
       term.options.fontSize = next
       fit.fit()
+    },
+    sendInput(text: string) {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(asSendable(encodeInput(text)))
+      }
+    },
+    focus() {
+      term.focus()
     },
     attach(target: HTMLElement) {
       el = target
