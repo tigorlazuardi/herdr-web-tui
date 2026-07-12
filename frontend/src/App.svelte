@@ -8,6 +8,7 @@
   import KeyBar from './components/KeyBar.svelte'
   import { createStickyModifiers } from './lib/keybar'
   import { createTerminalBridge, type ConnectionState } from './lib/terminal'
+  import Promptbox from './components/Promptbox.svelte'
 
   let container: HTMLDivElement
   let state = $state<ConnectionState>('connecting')
@@ -50,6 +51,7 @@
   </div>
   <div class="terminal" bind:this={container}></div>
   <KeyBar {bridge} {sticky} />
+  <Promptbox />
 </main>
 
 <style>
