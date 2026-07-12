@@ -66,6 +66,50 @@ func TestWS_MalformedFirstFrameClosesWithoutSpawning(t *testing.T) {
 	}
 }
 
+// TestWS_ConnectLogsResolvedSession asserts the /ws handler extracts the
+// session from the "session" query param, sanitizes it, and tags the "ws
+// connect" log line with the resolved name — the correlation-field
+// requirement from ticket 2 ("session name logged as a correlation
+// field"). It never lets herdr spawn (no resize frame sent), so it runs
+// without a live Herdr binary, matching this file's other handshake-only
+// tests.
+func TestWS_ConnectLogsResolvedSession(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       string
+		wantSession string
+	}{
+		{"valid session name passes through", "?session=work", "work"},
+		{"missing session falls back to default", "", defaultSession},
+		{"invalid session falls back to default", "?session=not+valid", defaultSession},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logBuf bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+			srv := httptest.NewServer(New(testFS(), log, noopHerdrClient{}, t.TempDir()))
+			defer srv.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws" + tt.query
+			conn, _, err := websocket.Dial(ctx, wsURL, nil)
+			if err != nil {
+				t.Fatalf("dial /ws: %v", err)
+			}
+			defer conn.CloseNow()
+
+			want := "session=" + tt.wantSession
+			if !strings.Contains(logBuf.String(), "ws connect") || !strings.Contains(logBuf.String(), want) {
+				t.Fatalf("expected \"ws connect\" log line with %q, got: %s", want, logBuf.String())
+			}
+		})
+	}
+}
+
 func TestClampSize_NeverBelowMinimum(t *testing.T) {
 	for _, cols := range []uint16{0, 1} {
 		for _, rows := range []uint16{0, 1} {

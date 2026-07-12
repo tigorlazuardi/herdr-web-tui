@@ -12,11 +12,6 @@ import (
 	pty "github.com/tigorlazuardi/herdr-web-tui/internal/pty"
 )
 
-// The render pty uses the package-level defaultSession (declared in
-// session.go alongside sanitizeSession) until ticket 2 adds URL-path-based
-// session routing — one shared constant so the pty and the inject daemon
-// agree on the fallback session name.
-
 // minResize is the smallest terminal size accepted from the browser's
 // initial resize frame; anything smaller almost certainly means the
 // fit-addon hasn't measured the DOM yet (a 0x0 or 1x1 pty confuses herdr's
@@ -27,14 +22,30 @@ const (
 )
 
 // newPTYHandler returns the /ws handler: it upgrades the request to a
-// websocket, spawns a Herdr pty for defaultSession, and bridges bytes both
-// directions until the connection drops. logger is the process-wide slog
-// logger (already correlation-aware via internal/logger); every log line
-// this handler emits carries both the originating HTTP request's req_id
-// (from withCorrelation) and a fresh per-connection conn_id, since a ws
-// connection outlives the single HTTP request that established it.
+// websocket, spawns a Herdr pty for the session named by the "session"
+// query param (e.g. /ws?session=work — the frontend derives this from
+// location.pathname, see frontend/src/lib/terminal.ts's sessionFromPath),
+// and bridges bytes both directions until the connection drops. The query
+// param is sanitized through the same sanitizeSession (session.go) the
+// /send handler uses, so a render pty and an inject targeting the same URL
+// path always agree on which Herdr session they mean.
+//
+// This is concurrency isolation, not tenancy: every session name reachable
+// from a URL is spawned under the same OS user with no access control of
+// its own (see the design doc's Multi-session concurrency section) — it
+// only stops two browser tabs on different paths from fighting over one
+// session's focus/sizing, it does not fence one viewer off from another's
+// session.
+//
+// logger is the process-wide slog logger (already correlation-aware via
+// internal/logger); every log line this handler emits carries both the
+// originating HTTP request's req_id (from withCorrelation) and a fresh
+// per-connection conn_id, since a ws connection outlives the single HTTP
+// request that established it, plus the resolved session name so a
+// multi-session server's logs can be filtered to one flow.
 func newPTYHandler(logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session := sanitizeSession(r.URL.Query().Get("session"))
 		connID := correlation.NewID()
 		ctx := correlation.WithConnID(r.Context(), connID)
 
@@ -50,8 +61,8 @@ func newPTYHandler(logger *slog.Logger) http.Handler {
 		// to block teardown waiting for a client that may be gone.
 		defer conn.CloseNow()
 
-		logger.InfoContext(ctx, "ws connect", slog.String("session", defaultSession))
-		serveTerminal(ctx, conn, logger)
+		logger.InfoContext(ctx, "ws connect", slog.String("session", session))
+		serveTerminal(ctx, conn, logger, session)
 	})
 }
 
@@ -66,21 +77,24 @@ func newPTYHandler(logger *slog.Logger) http.Handler {
 // away, network dropped) or the process is shutting down, which is what
 // gives the pty reader goroutine and the herdr process a hard stop: see
 // internal/pty's doc.go for the exact teardown sequence this triggers.
-func serveTerminal(ctx context.Context, conn *websocket.Conn, logger *slog.Logger) {
+//
+// session is already sanitized by the caller (newPTYHandler) and is passed
+// straight to pty.Spawn as the Herdr session to attach.
+func serveTerminal(ctx context.Context, conn *websocket.Conn, logger *slog.Logger, session string) {
 	size, err := readInitialSize(ctx, conn)
 	if err != nil {
 		logger.WarnContext(ctx, "ws closed before initial resize", slog.String("error", err.Error()))
 		return
 	}
 
-	bridge, err := pty.Spawn(defaultSession, size)
+	bridge, err := pty.Spawn(session, size)
 	if err != nil {
-		logger.ErrorContext(ctx, "pty spawn failed", slog.String("session", defaultSession), slog.String("error", err.Error()))
+		logger.ErrorContext(ctx, "pty spawn failed", slog.String("session", session), slog.String("error", err.Error()))
 		sendError(ctx, conn, "herdr unreachable: "+err.Error())
 		return
 	}
 	defer bridge.Close()
-	logger.InfoContext(ctx, "pty spawn", slog.String("session", defaultSession), slog.Any("size", size))
+	logger.InfoContext(ctx, "pty spawn", slog.String("session", session), slog.Any("size", size))
 
 	// runCtx is cancelled either by the caller's ctx (ws/http teardown) or
 	// by this function returning (readLoop below returning on a read
