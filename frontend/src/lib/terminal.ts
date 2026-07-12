@@ -28,6 +28,7 @@ import {
   encodeInput,
   encodeResizeFrame,
 } from './frames'
+import { sessionFromPath } from './session'
 
 export interface TerminalBridge {
   /** Mounts xterm into el and starts sizing/streaming. */
@@ -42,12 +43,6 @@ export interface TerminalBridge {
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
 
-/**
- * Builds the /ws URL from the current page location: ws(s):// + same host
- * + /ws. Session-name routing (the URL path selecting a Herdr session) is
- * ticket 2's job — this ticket always talks to the server's hardcoded
- * "default" session, so the path segment is not yet forwarded.
- */
 // asSendable narrows Uint8Array<ArrayBufferLike> (our encode helpers'
 // return type) to the ArrayBuffer-backed view WebSocket.send's TS types
 // demand. The underlying bytes are always a plain, non-shared ArrayBuffer
@@ -57,9 +52,20 @@ function asSendable(data: Uint8Array): ArrayBufferView<ArrayBuffer> {
   return data as ArrayBufferView<ArrayBuffer>
 }
 
+/**
+ * Builds the /ws URL from the current page location: ws(s):// + same host
+ * + /ws?session=<name>. The session query param is this ticket's routing
+ * mechanism (design doc: "Multi-session concurrency" — URL path selects
+ * the Herdr session for both the render pty and the inject daemon): the
+ * backend re-derives and re-sanitizes the name itself (sanitizeSession),
+ * so a missing/invalid value here is not a client-side validation bug, it
+ * just falls back to "default" server-side.
+ */
 function wsURL(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${location.host}/ws`
+  const session = sessionFromPath(location.pathname)
+  const query = session ? `?session=${encodeURIComponent(session)}` : ''
+  return `${proto}//${location.host}/ws${query}`
 }
 
 /**

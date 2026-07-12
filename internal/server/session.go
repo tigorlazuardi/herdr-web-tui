@@ -12,9 +12,16 @@ var sessionNamePattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 // doc: this string is fed straight into a process spawn, `herdr --session
 // <name> …`, so it must never carry shell metacharacters or path
 // separators) and falls back to defaultSession for anything empty or
-// disallowed. Ticket 2 reuses this same helper for the URL-path → session
-// mapping so both the render pty and the inject daemon agree on one
-// sanitization rule.
+// disallowed. Both the render pty (pty.go's newPTYHandler, reading the
+// "session" query param off the /ws URL) and the inject daemon (send.go's
+// ServeHTTP, reading the "session" multipart field) call this same helper,
+// so a browser tab on one URL path always resolves to the exact same Herdr
+// session on both the pty stream and any promptbox send from that tab —
+// this is what makes multi-session routing (design doc, "Multi-session
+// concurrency") a matter of concurrency isolation between URL paths, not
+// an access-control boundary: any path is reachable by anyone who can reach
+// this server at all, it just keeps two different paths' view/focus/sizing
+// from contending with each other.
 //
 // This never itself produces a 4xx: a syntactically bad name silently
 // becomes "default", matching the fallback behaviour the design doc

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,79 @@ func TestWS_MalformedFirstFrameClosesWithoutSpawning(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected connection to close after malformed first frame")
 	}
+}
+
+// TestWS_ConnectLogsResolvedSession asserts the /ws handler extracts the
+// session from the "session" query param, sanitizes it, and tags the "ws
+// connect" log line with the resolved name — the correlation-field
+// requirement from ticket 2 ("session name logged as a correlation
+// field"). It never lets herdr spawn (no resize frame sent), so it runs
+// without a live Herdr binary, matching this file's other handshake-only
+// tests.
+func TestWS_ConnectLogsResolvedSession(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       string
+		wantSession string
+	}{
+		{"valid session name passes through", "?session=work", "work"},
+		{"missing session falls back to default", "", defaultSession},
+		{"invalid session falls back to default", "?session=not+valid", defaultSession},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logBuf := &syncBuffer{}
+			log := slog.New(slog.NewTextHandler(logBuf, nil))
+
+			srv := httptest.NewServer(New(testFS(), log, noopHerdrClient{}, t.TempDir()))
+			defer srv.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws" + tt.query
+			conn, _, err := websocket.Dial(ctx, wsURL, nil)
+			if err != nil {
+				t.Fatalf("dial /ws: %v", err)
+			}
+			defer conn.CloseNow()
+
+			// The handler logs "ws connect" from the serve goroutine after
+			// the handshake returns to us, so poll with a short bounded
+			// retry instead of racing a single read of the buffer.
+			want := "session=" + tt.wantSession
+			var got string
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				got = logBuf.String()
+				if strings.Contains(got, "ws connect") && strings.Contains(got, want) {
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			t.Fatalf("expected \"ws connect\" log line with %q, got: %s", want, got)
+		})
+	}
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer so tests can safely read log
+// output that's written concurrently by net/http's serve goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func TestClampSize_NeverBelowMinimum(t *testing.T) {
