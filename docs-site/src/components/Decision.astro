@@ -1,0 +1,22 @@
+---
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+interface Props {
+  title: string;
+  status?: 'proposed' | 'accepted' | 'rejected' | 'superseded';
+}
+
+const { title, status = 'proposed' } = Astro.props;
+
+const variants = {
+  proposed: 'caution',
+  accepted: 'success',
+  rejected: 'danger',
+  superseded: 'note',
+} as const;
+---
+
+<Aside type="note" title={`Decision: ${title}`}>
+  <p><Badge text={status} variant={variants[status]} /></p>
+  <slot />
+</Aside>

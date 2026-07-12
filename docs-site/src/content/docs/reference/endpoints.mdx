@@ -1,0 +1,237 @@
+---
+title: Endpoint reference
+description: /send, /clientlog, and the /ws terminal stream — request/response contracts with I/O examples.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Three routes, registered in `internal/server/handler.go`. Every response
+carries `X-Request-Id` / `X-Correlation-Id` (set by the `withCorrelation`
+middleware, `internal/server/middleware.go`) — quote either header value back
+to an operator to find the matching log lines.
+
+## `POST /send` — artifact inject
+
+Implementation: `internal/server/send.go`. Atomic, all-or-nothing: save every
+uploaded file → resolve the template into one string → one
+`herdr pane run` call. There is no rollback logic — the fixed ordering itself
+is what makes a partial inject impossible: nothing is typed into any pane
+until every file referenced by the template has already been saved.
+
+**Content-Type:** `multipart/form-data`. The handler streams the multipart
+reader field-by-field (never buffers a whole upload in memory) and recognizes
+three kinds of parts:
+
+| Form field name | Kind | Required | Meaning |
+|---|---|---|---|
+| `template` | JSON | yes | `{"segments": [...]}` — see below. |
+| `session` | text | no | Herdr session name; sanitized to `[a-zA-Z0-9-]`, falls back to `default`. |
+| *(anything else)* | binary file | as referenced | A file the template's segments reference by this field name. |
+
+**`template` shape** (`internal/artifact/template.go`):
+
+```json
+{
+  "segments": [
+    { "text": "imgcat " },
+    { "file": "upload-1" },
+    { "text": " --resize 50%" }
+  ]
+}
+```
+
+Each segment is either `{"text": "..."}` (literal text) or
+`{"file": "<form-field-name>"}` (a marker resolved to the saved path of the
+file part with that field name). Order in the array is the ordering
+invariant — segments are concatenated in array order, there is no separate
+index. Server-side, each file is saved to
+`/tmp/<prefix>-<server-uid>/<uuid>[.ext]` and the marker is replaced with
+that path (`internal/artifact.Resolve`) — the browser never sees the staged
+path.
+
+Once resolved into one string, the server does exactly one
+`herdr --session <session> pane current` (find the focused pane) then one
+`herdr --session <session> pane run <pane> <resolved-text>` (type + Enter,
+atomic).
+
+**Response:** `application/json`, always shaped `{"ok": bool, "error"?: string}`.
+
+| Status | When |
+|---|---|
+| `200` | `{"ok": true}` — inject succeeded. |
+| `400` | Malformed multipart, missing `template` field, bad template JSON, or `herdr pane current` reports no such session (a syntactically valid but non-existent session — treated as a client mistake, since it's the first herdr call in the flow). |
+| `500` | I/O error saving a file, `herdr` unreachable at all (binary missing / can't spawn), or `herdr pane run` itself failed after the session was already proven to resolve a focused pane. |
+
+### I/O examples
+
+<Aside type="tip" title="Success">
+```http
+POST /send HTTP/1.1
+Content-Type: multipart/form-data; boundary=X
+
+--X
+Content-Disposition: form-data; name="template"
+Content-Type: application/json
+
+{"segments": [{"text": "imgcat "}, {"file": "upload-1"}]}
+--X
+Content-Disposition: form-data; name="session"
+
+work
+--X
+Content-Disposition: form-data; name="upload-1"; filename="x.png"
+Content-Type: image/png
+
+<binary png bytes>
+--X--
+```
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Request-Id: c9k2f8t1a2b3c4d5e6f7
+X-Correlation-Id: c9k2f8t1a2b3c4d5e6f7
+
+{"ok": true}
+```
+</Aside>
+
+<Aside type="danger" title="Failure — bad session">
+```http
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+X-Request-Id: c9k2f8t1a2b3c4d5e6f8
+
+{"ok": false, "error": "bad session \"ghost\": herdr reported no focused pane"}
+```
+</Aside>
+
+<Aside type="danger" title="Failure — inject failed (5xx, after session resolved)">
+```http
+HTTP/1.1 500 Internal Server Error
+Content-Type: application/json
+X-Request-Id: c9k2f8t1a2b3c4d5e6f9
+
+{"ok": false, "error": "inject failed: herdr command failed: pane not found"}
+```
+</Aside>
+
+## `POST /clientlog` — frontend error report
+
+Implementation: `internal/server/send.go` (`clientlogHandler`). Lets the
+browser report its own errors (uncaught exceptions, failed fetches) into the
+same server log stream, tagged with the correlation id the frontend read off
+a failing request's `X-Request-Id`/`X-Correlation-Id` response header — so the
+frontend's own error display and the backend's log lines for the original
+failing request reconcile under one id.
+
+**Content-Type:** `application/json`.
+
+```json
+{
+  "message": "upload failed",
+  "stack": "Error: upload failed\n    at ...",
+  "url": "https://your-domain/work",
+  "ref_id": "c9k2f8t1a2b3c4d5e6f8"
+}
+```
+
+Only `message` is required.
+
+**Response:** `application/json`, `{"ok": bool}`.
+
+| Status | When |
+|---|---|
+| `200` | `{"ok": true}` — logged. |
+| `400` | Malformed JSON body, or missing `message`. |
+
+### I/O example
+
+```http
+POST /clientlog HTTP/1.1
+Content-Type: application/json
+
+{"message": "upload failed", "ref_id": "c9k2f8t1a2b3c4d5e6f8"}
+```
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Request-Id: d1a2b3c4d5e6f7g8h9i0
+
+{"ok": true}
+```
+
+## `GET /ws` — terminal stream
+
+Implementation: `internal/server/pty.go`. Upgrades to a websocket
+(`github.com/coder/websocket`), spawns one Herdr pty per connection via
+`internal/pty.Spawn`, and bridges bytes bidirectionally until either side
+closes.
+
+**Query param:** `?session=<name>` — same `sanitizeSession` allowlist/fallback
+as `/send`'s `session` field, so a `/ws` connection and a `/send` call from
+the same page always target the same Herdr session.
+
+**Wire format** (`internal/server/frames.go`): every binary websocket message
+is `[1-byte type][payload]`.
+
+| Type byte | Name | Direction | Payload |
+|---|---|---|---|
+| `'r'` | `FrameResize` | client → server | 4 bytes: cols (uint16 BE), rows (uint16 BE). |
+| `'i'` | `FrameInput` | client → server | Raw keystroke/paste bytes. |
+| `'o'` | `FrameOutput` | server → client | Raw pty stdout/stderr bytes. |
+| `'e'` | `FrameError` | server → client | UTF-8 error message (e.g. herdr unreachable). |
+
+**Handshake:** after the ws upgrade, the server blocks (5s timeout) waiting
+for the client's **first frame**, which must be `FrameResize` — this sizes
+the pty correctly *before* spawning Herdr instead of spawning at a guessed
+size and resizing after (`readInitialSize`). Any resize below `2x2` is
+clamped up to `2x2` (`clampSize`) since a not-yet-measured `0x0`/`1x1`
+viewport would otherwise hand Herdr a degenerate layout. After that, the
+client may send further `FrameResize` frames at any time (on browser
+resize/orientation change) and `FrameInput` frames for every keystroke/paste.
+
+**Correlation:** the HTTP upgrade response carries `X-Request-Id` /
+`X-Correlation-Id` like any other response; the server also assigns a
+separate per-connection id (`internal/correlation.WithConnID`) that outlives
+the single upgrade request and tags every log line for that connection's
+whole lifetime.
+
+### I/O example
+
+```
+GET /ws?session=work HTTP/1.1
+Host: your-domain
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: ...
+Sec-WebSocket-Version: 13
+```
+
+```
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+X-Request-Id: e2b3c4d5e6f7g8h9i0j1
+X-Correlation-Id: e2b3c4d5e6f7g8h9i0j1
+```
+
+Frame sequence after the upgrade:
+
+```
+→ [FrameResize] cols=120 rows=30       # client: first frame, required, sizes the pty spawn
+← [FrameOutput] "...herdr TUI bytes..." # server: initial render
+→ [FrameInput]  "c"                    # client: user typed 'c'
+← [FrameOutput] "...updated bytes..."
+→ [FrameResize] cols=120 rows=35       # client: browser window resized
+```
+
+A spawn failure (herdr unreachable) instead yields, immediately after the
+handshake frame above:
+
+```
+← [FrameError] "herdr unreachable: herdr binary not found on PATH"
+```
+
+followed by the server closing the connection.

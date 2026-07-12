@@ -1,0 +1,42 @@
+---
+interface Props {
+  title?: string;
+  height?: string;
+}
+
+const { title = 'UI mock', height = 'auto' } = Astro.props;
+---
+
+<figure class="ui-mock not-content">
+  <figcaption>
+    <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+    <span class="mock-title">{title}</span>
+  </figcaption>
+  <div class="ui-mock-body" style={`min-height:${height}`}>
+    <slot />
+  </div>
+</figure>
+
+<style>
+  .ui-mock {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    margin: 1.5rem 0;
+  }
+  .ui-mock figcaption {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    background: var(--sl-color-gray-6);
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-2);
+  }
+  .mock-title { margin-inline-start: 0.35rem; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .red { background: #f56; }
+  .yellow { background: #fb3; }
+  .green { background: #4c4; }
+  .ui-mock-body { padding: 1rem; background: var(--sl-color-bg); }
+</style>

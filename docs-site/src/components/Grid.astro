@@ -1,0 +1,24 @@
+---
+interface Props {
+  /** Min cell width before wrapping to the next row. Default 18rem. */
+  minWidth?: string;
+}
+const { minWidth = '18rem' } = Astro.props;
+---
+
+<div class="doc-grid not-content" style={`--doc-grid-min: ${minWidth}`}>
+  <slot />
+</div>
+
+<style>
+  .doc-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(var(--doc-grid-min, 18rem), 100%), 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+    align-items: start;
+  }
+  @media print {
+    .doc-grid { grid-template-columns: 1fr; }
+  }
+</style>

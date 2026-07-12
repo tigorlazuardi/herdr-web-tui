@@ -1,0 +1,15 @@
+---
+// Starlight's default PageTitle has no <slot />, so render it standalone
+// and emit the button as a sibling (one <h1> per page = one button).
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+---
+
+<Default />
+<button
+  class="print-btn"
+  type="button"
+  onclick="window.print()"
+  aria-label="Print or save this page as PDF"
+>
+  🖨️ Print / PDF
+</button>
