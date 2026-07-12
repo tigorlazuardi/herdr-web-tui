@@ -64,6 +64,12 @@ export interface TerminalBridge {
   sendInput(text: string): void
   /** Refocuses xterm's hidden textarea, e.g. after a key-bar button steals focus. */
   focus(): void
+  /**
+   * Dismisses the soft keyboard by blurring xterm's hidden textarea — used
+   * when switching to keys mode so the accessory bar isn't fighting the
+   * on-screen keyboard for space.
+   */
+  blur(): void
 }
 
 const DEFAULT_FONT_SIZE = 15
@@ -248,6 +254,9 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
     },
     focus() {
       term.focus()
+    },
+    blur() {
+      term.blur()
     },
     attach(target: HTMLElement) {
       el = target

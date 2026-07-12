@@ -13,22 +13,24 @@
   // term.onData (see terminal.ts's createTerminalBridge doc) so a
   // key-bar Ctrl tap and a soft-keyboard keystroke consume the same latch.
   //
-  // `visible` is a plain controlled prop (mobile-ux-v2.md "Topbar"): this
-  // component used to own its own show/hide toggle, fixed bottom-right,
-  // which collided with App.svelte's font +/- lever in the same corner
-  // (issue #3). The toggle now lives in Topbar.svelte and its state in
-  // App.svelte; KeyBar just renders (or doesn't) based on what it's told.
-  let { bridge, sticky, visible }: { bridge: TerminalBridge; sticky: StickyModifiers; visible: boolean } =
-    $props()
+  // No `visible` prop: App.svelte now renders this component only while
+  // inputMode === 'keys' (mobile-ux-v2.md "Topbar" + the exclusive-mode
+  // rework) — presence in the tree IS the visibility, single owner in the
+  // parent, so there's no separate flag to keep in sync here.
+  let { bridge, sticky }: { bridge: TerminalBridge; sticky: StickyModifiers } = $props()
 
   let mods = $state(sticky.state)
   onMount(() => sticky.subscribe((s) => (mods = s)))
 
   // key: the logical name (SPECIAL_KEYS key, e.g. "ArrowUp") for anything
-  // that isn't a literal printable character sent as-is.
+  // that isn't a literal printable character sent as-is. Deliberately does
+  // NOT call bridge.focus(): sendInput() writes straight to the ws, so the
+  // key still reaches the terminal without touching xterm's hidden
+  // textarea. Refocusing it here used to pop the soft keyboard back open
+  // on every tap, which fought App.svelte's blur() on entry into keys mode
+  // and defeated the whole point of a dedicated keys mode.
   function press(key: string) {
     bridge.sendInput(sticky.consume(key))
-    bridge.focus()
   }
 
   // Long-press -> alternate character (design doc: "long-press for
@@ -70,68 +72,66 @@
   const fKeys = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']
 </script>
 
-{#if visible}
-  <div class="keybar" role="toolbar" aria-label="Accessory key bar">
-    <div class="row">
-      <button type="button" onclick={() => press('Escape')}>Esc</button>
-      <button
-        type="button"
-        class="mod"
-        aria-pressed={mods.ctrl}
-        onclick={() => sticky.toggle('ctrl')}
-      >
-        Ctrl
-      </button>
-      <button
-        type="button"
-        class="mod"
-        aria-pressed={mods.alt}
-        onclick={() => sticky.toggle('alt')}
-      >
-        Alt
-      </button>
-      <button type="button" onclick={() => press('Tab')}>Tab</button>
-      <button
-        type="button"
-        class="mod"
-        aria-pressed={mods.fn}
-        onclick={() => sticky.toggle('fn')}
-      >
-        Fn
-      </button>
-      <!-- Dedicated prefix button (design doc: "nice-to-have") — sends
-           Herdr's ctrl+b prefix directly, without needing to tap Ctrl
-           first. Bypasses the sticky latch entirely since it's a fixed
-           combo, not a general modifier. -->
-      <button type="button" onclick={() => bridge.sendInput('\x02')}>^B</button>
-      <button type="button" onclick={() => press('ArrowLeft')}>←</button>
-      <button type="button" onclick={() => press('ArrowDown')}>↓</button>
-      <button type="button" onclick={() => press('ArrowUp')}>↑</button>
-      <button type="button" onclick={() => press('ArrowRight')}>→</button>
-    </div>
-    <div class="row row2">
-      <button type="button" onclick={() => press('Home')}>Home</button>
-      <button type="button" onclick={() => press('End')}>End</button>
-      <button type="button" onclick={() => press('PageUp')}>PgUp</button>
-      <button type="button" onclick={() => press('PageDown')}>PgDn</button>
-      {#each row2Punct as char (char)}
-        <button
-          type="button"
-          title={ALTERNATES[char] ? `long-press for ${ALTERNATES[char]}` : undefined}
-          onpointerdown={() => startPress(char)}
-          onpointerup={() => endPress(char)}
-          onpointerleave={cancelPress}
-          onpointercancel={cancelPress}
-        >
-          {char}
-        </button>
-      {/each}
-      {#each fKeys as fk (fk)}
-        <button type="button" onclick={() => press(fk)}>{fk}</button>
-      {/each}
-    </div>
+<div class="keybar" role="toolbar" aria-label="Accessory key bar">
+  <div class="row">
+    <button type="button" onclick={() => press('Escape')}>Esc</button>
+    <button
+      type="button"
+      class="mod"
+      aria-pressed={mods.ctrl}
+      onclick={() => sticky.toggle('ctrl')}
+    >
+      Ctrl
+    </button>
+    <button
+      type="button"
+      class="mod"
+      aria-pressed={mods.alt}
+      onclick={() => sticky.toggle('alt')}
+    >
+      Alt
+    </button>
+    <button type="button" onclick={() => press('Tab')}>Tab</button>
+    <button
+      type="button"
+      class="mod"
+      aria-pressed={mods.fn}
+      onclick={() => sticky.toggle('fn')}
+    >
+      Fn
+    </button>
+    <!-- Dedicated prefix button (design doc: "nice-to-have") — sends
+         Herdr's ctrl+b prefix directly, without needing to tap Ctrl
+         first. Bypasses the sticky latch entirely since it's a fixed
+         combo, not a general modifier. -->
+    <button type="button" onclick={() => bridge.sendInput('\x02')}>^B</button>
+    <button type="button" onclick={() => press('ArrowLeft')}>←</button>
+    <button type="button" onclick={() => press('ArrowDown')}>↓</button>
+    <button type="button" onclick={() => press('ArrowUp')}>↑</button>
+    <button type="button" onclick={() => press('ArrowRight')}>→</button>
   </div>
-{/if}
+  <div class="row row2">
+    <button type="button" onclick={() => press('Home')}>Home</button>
+    <button type="button" onclick={() => press('End')}>End</button>
+    <button type="button" onclick={() => press('PageUp')}>PgUp</button>
+    <button type="button" onclick={() => press('PageDown')}>PgDn</button>
+    {#each row2Punct as char (char)}
+      <button
+        type="button"
+        title={ALTERNATES[char] ? `long-press for ${ALTERNATES[char]}` : undefined}
+        onpointerdown={() => startPress(char)}
+        onpointerup={() => endPress(char)}
+        onpointerleave={cancelPress}
+        onpointercancel={cancelPress}
+      >
+        {char}
+      </button>
+    {/each}
+    {#each fKeys as fk (fk)}
+      <button type="button" onclick={() => press(fk)}>{fk}</button>
+    {/each}
+  </div>
+</div>
 
 <style>
   .keybar {

@@ -21,18 +21,27 @@
   const sticky = createStickyModifiers()
   const bridge = createTerminalBridge(sticky)
 
-  // App owns the accessory key bar's visibility (mobile-ux-v2.md
-  // "Topbar"): KeyBar used to toggle itself, which meant its toggle button
-  // and this same show/hide decision lived only inside KeyBar. Now Topbar
-  // renders the toggle button and mutates this via `bind:`, KeyBar just
-  // reads it as a prop — single owner, two controlled children. Default
-  // hidden on a device with a real (fine-pointer) mouse, since a hardware
-  // keyboard is the near-certain companion of a mouse and the bar would
-  // just eat screen space; the toggle always wins over this heuristic
-  // afterwards.
-  const coarsePointer =
-    typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
-  let keybarVisible = $state(coarsePointer)
+  // App owns the input mode (mobile-ux-v2.md "Topbar"): promptbox and the
+  // accessory key bar are MUTUALLY EXCLUSIVE, never both on screen, to save
+  // vertical space on a phone. Topbar renders the single toggle button and
+  // mutates this via `bind:`; Promptbox/KeyBar below just read it to decide
+  // whether to render at all — single owner, two controlled children.
+  let inputMode = $state<'promptbox' | 'keys'>('promptbox')
+
+  // Entering keys mode must actually dismiss the soft keyboard, or the
+  // accessory bar and the on-screen keyboard end up splitting the screen
+  // anyway — the exact thing this mode switch exists to prevent. Keyed on
+  // inputMode rather than inlined in the toggle handler so it also fires
+  // correctly if inputMode is ever driven from somewhere else. Blurring
+  // both the terminal bridge's hidden textarea AND document.activeElement
+  // covers the two places focus (and thus the keyboard) can be sitting:
+  // the terminal itself, or the promptbox's contenteditable.
+  $effect(() => {
+    if (inputMode === 'keys') {
+      bridge.blur()
+      ;(document.activeElement as HTMLElement | null)?.blur()
+    }
+  })
 
   onMount(() => {
     const unsubscribe = bridge.onStateChange((s) => (state = s))
@@ -46,15 +55,20 @@
 </script>
 
 <main>
-  <!-- Layout A (mobile-ux-v2.md): topbar → terminal (flex:1) → promptbox
-       → accessory keys (when visible) → soft keyboard, top to bottom, all
-       in normal flex-column flow. Nothing here is position:fixed over
-       another element in this stack — that's what let the old floating
-       key bar cover the promptbox (issue #2). -->
-  <Topbar {bridge} bind:keybarVisible connectionState={state} />
+  <!-- Layout A (mobile-ux-v2.md): topbar → terminal (flex:1) → promptbox OR
+       accessory keys → soft keyboard, top to bottom, all in normal
+       flex-column flow. Promptbox and KeyBar are exclusive siblings —
+       exactly one renders per inputMode, so they never compete for the
+       same screen space. Nothing here is position:fixed over another
+       element in this stack — that's what let the old floating key bar
+       cover the promptbox (issue #2). -->
+  <Topbar {bridge} bind:inputMode connectionState={state} />
   <div class="terminal" bind:this={container}></div>
-  <Promptbox />
-  <KeyBar {bridge} {sticky} visible={keybarVisible} />
+  {#if inputMode === 'promptbox'}
+    <Promptbox />
+  {:else}
+    <KeyBar {bridge} {sticky} />
+  {/if}
 </main>
 
 <style>

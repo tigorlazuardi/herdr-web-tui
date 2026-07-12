@@ -10,19 +10,24 @@
    * button (it used to be fixed top-right while the toggle was fixed
    * bottom-right; now both live in the same bar).
    *
-   * `keybarVisible` is `$bindable` so this component can both display and
-   * flip it, but the state itself lives in App.svelte (the single owner
-   * KeyBar.svelte reads as a plain controlled prop) — see App.svelte's
-   * doc comment on why the toggle moved out of KeyBar.
+   * The toggle button now switches between two mutually exclusive input
+   * modes rather than showing/hiding the key bar independently of the
+   * promptbox — `inputMode` is `$bindable` so this component can both
+   * display and flip it, but the state itself lives in App.svelte (the
+   * single owner; Promptbox/KeyBar read it as a plain controlled prop) —
+   * see App.svelte's doc comment.
    */
   import type { ConnectionState, TerminalBridge } from '../lib/terminal'
 
   let {
     bridge,
-    keybarVisible = $bindable(),
+    inputMode = $bindable(),
     connectionState,
-  }: { bridge: TerminalBridge; keybarVisible: boolean; connectionState: ConnectionState } =
-    $props()
+  }: {
+    bridge: TerminalBridge
+    inputMode: 'promptbox' | 'keys'
+    connectionState: ConnectionState
+  } = $props()
 </script>
 
 <div class="topbar" role="toolbar" aria-label="Terminal controls">
@@ -47,14 +52,17 @@
     {/if}
   </div>
 
+  <!-- Single button, two mutually-exclusive modes: aria-pressed reflects
+       "keys mode is active" and the label always names the mode a tap
+       would switch TO, not the current one. -->
   <button
     class="toggle"
     type="button"
-    aria-pressed={keybarVisible}
-    aria-label={keybarVisible ? 'Hide key bar' : 'Show key bar'}
-    onclick={() => (keybarVisible = !keybarVisible)}
+    aria-pressed={inputMode === 'keys'}
+    aria-label={inputMode === 'keys' ? 'Switch to text input' : 'Switch to keys'}
+    onclick={() => (inputMode = inputMode === 'keys' ? 'promptbox' : 'keys')}
   >
-    {keybarVisible ? '⌨︎' : '⌨'}
+    {inputMode === 'keys' ? '✎' : '⌨'}
   </button>
 </div>
 

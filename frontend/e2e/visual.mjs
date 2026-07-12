@@ -30,14 +30,19 @@ async function main() {
   const filePath = join(dir, longName)
   writeFileSync(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9])) // minimal jpeg-ish bytes, content unused
 
+  // Default mode is promptbox (mobile-ux-v2.md exclusive-mode rework): no
+  // keybar toggle needed to see it. Attaching a file renders a pill so the
+  // promptbox screenshot isn't just an empty box.
   await page.setInputFiles('input[type=file]', filePath)
   await page.waitForTimeout(300)
-  await page.screenshot({ path: join(OUT, '02-pill.png') })
+  await page.screenshot({ path: join(OUT, '02-promptbox.png') })
 
   // Topbar toggle is the rightmost control (mobile-ux-v2.md "Topbar").
-  await page.click('button[aria-label="Show key bar"], button[aria-label="Hide key bar"]')
+  // Promptbox and keybar are mutually exclusive: tapping it swaps the
+  // promptbox out for the accessory key bar, never both on screen.
+  await page.click('button[aria-label="Switch to keys"]')
   await page.waitForTimeout(300)
-  await page.screenshot({ path: join(OUT, '03-keybar-on.png') })
+  await page.screenshot({ path: join(OUT, '03-keys.png') })
 
   await browser.close()
   console.log('done')
