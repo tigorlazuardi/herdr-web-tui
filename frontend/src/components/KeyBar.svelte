@@ -70,6 +70,12 @@
 
   const row2Punct = ['/', '-', '|', '~', ':']
   const fKeys = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']
+
+  // Termux-style: only row 1 (nav + modifiers) is visible by default so the
+  // bar costs a single row of the phone's limited vertical space. Row 2
+  // (Home/End/PgUp/PgDn, punctuation, F-keys) is rarely used and hidden
+  // behind this toggle, matching Termux's own extra-keys row behavior.
+  let expanded = $state(false)
 </script>
 
 <div class="keybar" role="toolbar" aria-label="Accessory key bar">
@@ -109,28 +115,39 @@
     <button type="button" onclick={() => press('ArrowDown')}>↓</button>
     <button type="button" onclick={() => press('ArrowUp')}>↑</button>
     <button type="button" onclick={() => press('ArrowRight')}>→</button>
+    <button
+      type="button"
+      class="toggle"
+      aria-label={expanded ? 'Hide extra keys' : 'Show extra keys'}
+      aria-expanded={expanded}
+      onclick={() => (expanded = !expanded)}
+    >
+      {expanded ? '∧' : '∨'}
+    </button>
   </div>
-  <div class="row row2">
-    <button type="button" onclick={() => press('Home')}>Home</button>
-    <button type="button" onclick={() => press('End')}>End</button>
-    <button type="button" onclick={() => press('PageUp')}>PgUp</button>
-    <button type="button" onclick={() => press('PageDown')}>PgDn</button>
-    {#each row2Punct as char (char)}
-      <button
-        type="button"
-        title={ALTERNATES[char] ? `long-press for ${ALTERNATES[char]}` : undefined}
-        onpointerdown={() => startPress(char)}
-        onpointerup={() => endPress(char)}
-        onpointerleave={cancelPress}
-        onpointercancel={cancelPress}
-      >
-        {char}
-      </button>
-    {/each}
-    {#each fKeys as fk (fk)}
-      <button type="button" onclick={() => press(fk)}>{fk}</button>
-    {/each}
-  </div>
+  {#if expanded}
+    <div class="row row2">
+      <button type="button" onclick={() => press('Home')}>Home</button>
+      <button type="button" onclick={() => press('End')}>End</button>
+      <button type="button" onclick={() => press('PageUp')}>PgUp</button>
+      <button type="button" onclick={() => press('PageDown')}>PgDn</button>
+      {#each row2Punct as char (char)}
+        <button
+          type="button"
+          title={ALTERNATES[char] ? `long-press for ${ALTERNATES[char]}` : undefined}
+          onpointerdown={() => startPress(char)}
+          onpointerup={() => endPress(char)}
+          onpointerleave={cancelPress}
+          onpointercancel={cancelPress}
+        >
+          {char}
+        </button>
+      {/each}
+      {#each fKeys as fk (fk)}
+        <button type="button" onclick={() => press(fk)}>{fk}</button>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -188,5 +205,11 @@
   .row button.mod[aria-pressed='true'] {
     background: #f59e0b;
     color: #1c1917;
+  }
+
+  .row button.toggle {
+    /* Doesn't grow with the other row-1 keys — it's a fixed-width chevron,
+       not a key, so it shouldn't compete for width. */
+    flex: none;
   }
 </style>
