@@ -175,7 +175,7 @@
 
   .row {
     display: flex;
-    gap: 0.25rem;
+    gap: 0.1875rem;
   }
 
   .row2 {
@@ -187,9 +187,14 @@
   }
 
   .row button {
-    flex: 1 0 2.25rem;
-    min-width: 2.25rem;
+    /* Row 1 is all-essential (nav + modifiers + toggle) and must never
+       scroll, unlike .row2 above — so instead of a fixed floor these
+       shrink (flex-shrink 1, min-width 0) to compress evenly and keep
+       every key, including the trailing arrow and toggle, on screen. */
+    flex: 1 1 0;
+    min-width: 0;
     height: 2.25rem;
+    padding: 0;
     border: none;
     border-radius: 0.375rem;
     background: #292524;
