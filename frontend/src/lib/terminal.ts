@@ -106,6 +106,52 @@ export function clampFontSize(current: number, delta: number): number {
   return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, current + delta))
 }
 
+const FONT_SIZE_KEY = 'herdr-web-tui:fontSize'
+
+/**
+ * Pure parse+clamp for the font size persisted in localStorage, split out
+ * so it's testable without touching localStorage/DOM — see
+ * terminal.test.ts. A stored value that's missing, non-numeric, or
+ * outside [MIN_FONT_SIZE, MAX_FONT_SIZE] (e.g. hand-edited devtools
+ * storage, or a size from a future build with different bounds) falls
+ * back to DEFAULT_FONT_SIZE rather than feeding xterm a bad initial size.
+ */
+export function readStoredFontSize(raw: string | null): number {
+  if (raw === null) return DEFAULT_FONT_SIZE
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < MIN_FONT_SIZE || parsed > MAX_FONT_SIZE) {
+    return DEFAULT_FONT_SIZE
+  }
+  return parsed
+}
+
+/**
+ * Reads the persisted font size, guarded because localStorage can throw
+ * (private/incognito mode, disabled storage, quota errors) — a readability
+ * preference must never crash terminal construction.
+ */
+function loadFontSize(): number {
+  try {
+    return readStoredFontSize(localStorage.getItem(FONT_SIZE_KEY))
+  } catch {
+    return DEFAULT_FONT_SIZE
+  }
+}
+
+/**
+ * Persists the font size so it survives a reload (per-device readability
+ * preference, see adjustFontSize's doc comment) — guarded for the same
+ * reason as loadFontSize; a failed write just means the next reload falls
+ * back to DEFAULT_FONT_SIZE, which is harmless.
+ */
+function saveFontSize(size: number) {
+  try {
+    localStorage.setItem(FONT_SIZE_KEY, String(size))
+  } catch {
+    // ignore — see saveFontSize's doc comment
+  }
+}
+
 export type ConnectionState = 'connecting' | 'open' | 'closed'
 
 // asSendable narrows Uint8Array<ArrayBufferLike> (our encode helpers'
@@ -151,6 +197,7 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
     cursorBlink: true,
     scrollback: 5000,
     allowProposedApi: true,
+    fontSize: loadFontSize(),
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -278,6 +325,71 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
 
   let resizeObserver: ResizeObserver | null = null
 
+  /**
+   * Touch-drag-to-scroll shim. Two facts collide without it: the pane's
+   * `touch-action: none` (App.svelte) kills the browser's native pinch/
+   * scroll so it doesn't fight xterm's own pointer handling, but xterm.js
+   * itself never turns a touch-drag into scroll — it only understands
+   * mouse WHEEL events. Herdr is a mouse-first TUI (mouse-tracking mode
+   * forwards wheel events to whatever pane/app is under the cursor, e.g.
+   * a pager), so a finger dragging up/down on a phone must be translated
+   * into synthetic wheel events for xterm/Herdr to see any scroll at all.
+   * A ~8px slop distinguishes an intentional drag from a tap, so pane/tab
+   * switching (mouse-first, tap-to-click) keeps working: below slop we
+   * never preventDefault or dispatch, so the browser synthesizes its own
+   * click as usual.
+   */
+  let touchActive = false
+  let touchMoved = false
+  let touchStartY = 0
+  let touchLastY = 0
+  const TOUCH_SLOP = 8
+
+  function onTouchStart(e: TouchEvent) {
+    if (e.touches.length !== 1) {
+      // Multi-touch = pinch or other gesture, not our scroll shim's job —
+      // let the browser/xterm handle it untouched.
+      touchActive = false
+      return
+    }
+    touchActive = true
+    touchMoved = false
+    touchStartY = e.touches[0].clientY
+    touchLastY = touchStartY
+  }
+
+  function onTouchMove(e: TouchEvent) {
+    if (!touchActive || e.touches.length !== 1) return
+    const touch = e.touches[0]
+    const dy = touch.clientY - touchLastY
+    touchLastY = touch.clientY
+    if (!touchMoved && Math.abs(touch.clientY - touchStartY) > TOUCH_SLOP) {
+      touchMoved = true
+    }
+    if (!touchMoved) return
+    // Past slop: this is a scroll drag, not a tap — steal the gesture from
+    // the browser and forward it to xterm as wheel. Finger-down (dy > 0)
+    // means "pull content toward history", i.e. scroll up, i.e. negative
+    // deltaY — hence the sign flip.
+    e.preventDefault()
+    const target = e.target instanceof EventTarget ? e.target : el
+    target?.dispatchEvent(
+      new WheelEvent('wheel', {
+        deltaY: -dy,
+        deltaMode: 0,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  }
+
+  function onTouchEnd() {
+    touchActive = false
+    touchMoved = false
+  }
+
   return {
     get connected() {
       return state === 'open'
@@ -292,6 +404,7 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
       if (next === current) return
       term.options.fontSize = next
       fit.fit()
+      saveFontSize(next)
     },
     sendInput(text: string) {
       if (ws?.readyState === WebSocket.OPEN) {
@@ -323,6 +436,14 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
       // shadow it.
       el.addEventListener('contextmenu', (e) => e.preventDefault())
 
+      // { passive: false } is required so preventDefault() in onTouchMove
+      // can actually suppress the browser's default touch handling once a
+      // drag is detected — see the touch-scroll shim's doc comment above.
+      el.addEventListener('touchstart', onTouchStart, { passive: false })
+      el.addEventListener('touchmove', onTouchMove, { passive: false })
+      el.addEventListener('touchend', onTouchEnd, { passive: false })
+      el.addEventListener('touchcancel', onTouchEnd, { passive: false })
+
       resizeObserver = new ResizeObserver(() => {
         fit.fit()
       })
@@ -334,6 +455,10 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
       closed = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
       resizeObserver?.disconnect()
+      el?.removeEventListener('touchstart', onTouchStart)
+      el?.removeEventListener('touchmove', onTouchMove)
+      el?.removeEventListener('touchend', onTouchEnd)
+      el?.removeEventListener('touchcancel', onTouchEnd)
       ws?.close()
       term.dispose()
     },

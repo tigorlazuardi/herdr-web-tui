@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampFontSize } from './terminal'
+import { clampFontSize, readStoredFontSize } from './terminal'
 
 // Only the font +/- lever's clamp logic is pure/testable without a DOM +
 // WebSocket (see clampFontSize's doc comment in terminal.ts); the rest of
@@ -20,5 +20,24 @@ describe('clampFontSize', () => {
 
   it('ceilings at MAX_FONT_SIZE (32)', () => {
     expect(clampFontSize(32, 1)).toBe(32)
+  })
+})
+
+describe('readStoredFontSize', () => {
+  it('accepts a valid in-range value', () => {
+    expect(readStoredFontSize('20')).toBe(20)
+  })
+
+  it('falls back to default when null (nothing stored yet)', () => {
+    expect(readStoredFontSize(null)).toBe(15)
+  })
+
+  it('falls back to default when out of range', () => {
+    expect(readStoredFontSize('100')).toBe(15)
+    expect(readStoredFontSize('0')).toBe(15)
+  })
+
+  it('falls back to default on garbage input', () => {
+    expect(readStoredFontSize('not-a-number')).toBe(15)
   })
 })
