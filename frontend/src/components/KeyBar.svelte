@@ -71,10 +71,14 @@
   const row2Punct = ['/', '-', '|', '~', ':']
   const fKeys = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']
 
-  // Termux-style: only row 1 (nav + modifiers) is visible by default so the
-  // bar costs a single row of the phone's limited vertical space. Row 2
-  // (Home/End/PgUp/PgDn, punctuation, F-keys) is rarely used and hidden
-  // behind this toggle, matching Termux's own extra-keys row behavior.
+  // Termux-style, but split across two always-visible rows instead of one:
+  // cramming all 11 essential items (Esc/Ctrl/Alt/Tab/Fn/^B + 4 arrows +
+  // toggle) into a single row forced them to shrink-to-fit on a phone,
+  // leaving tiny, hard-to-tap targets. Row A (modifiers) and Row B (arrows
+  // + toggle) each hold <=6 items, so every button stays a comfortable tap
+  // target with no shrink-cram. Row C (Home/End/PgUp/PgDn, punctuation,
+  // F-keys) is rarely used and stays hidden behind this toggle, matching
+  // Termux's own extra-keys row behavior.
   let expanded = $state(false)
 </script>
 
@@ -111,6 +115,8 @@
          first. Bypasses the sticky latch entirely since it's a fixed
          combo, not a general modifier. -->
     <button type="button" onclick={() => bridge.sendInput('\x02')}>^B</button>
+  </div>
+  <div class="row">
     <button type="button" onclick={() => press('ArrowLeft')}>←</button>
     <button type="button" onclick={() => press('ArrowDown')}>↓</button>
     <button type="button" onclick={() => press('ArrowUp')}>↑</button>
@@ -175,7 +181,7 @@
 
   .row {
     display: flex;
-    gap: 0.1875rem;
+    gap: 0.25rem;
   }
 
   .row2 {
@@ -187,14 +193,16 @@
   }
 
   .row button {
-    /* Row 1 is all-essential (nav + modifiers + toggle) and must never
-       scroll, unlike .row2 above — so instead of a fixed floor these
-       shrink (flex-shrink 1, min-width 0) to compress evenly and keep
-       every key, including the trailing arrow and toggle, on screen. */
-    flex: 1 1 0;
-    min-width: 0;
+    /* Both always-visible rows top out at 6 items (row A: Esc/Ctrl/Alt/
+       Tab/Fn/^B; row B: 4 arrows + toggle), so a sensible min-width fits
+       comfortably on a phone with no shrink-cram — unlike the old single
+       11-item row this replaces. Row 2's F-keys/punctuation still exceed
+       one screen width even at this floor, which is exactly what drives
+       its horizontal scroll below instead of ever compressing to fit. */
+    flex: 1 1 auto;
+    min-width: 2.25rem;
     height: 2.25rem;
-    padding: 0;
+    padding: 0 0.4rem;
     border: none;
     border-radius: 0.375rem;
     background: #292524;
