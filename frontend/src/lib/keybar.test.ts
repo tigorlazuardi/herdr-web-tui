@@ -86,4 +86,25 @@ describe('createStickyModifiers', () => {
     unsubscribe()
     expect(seen).toEqual([true, false])
   })
+
+  it('clear() un-latches a live modifier and notifies (tap TUI cancels Ctrl)', () => {
+    const sticky = createStickyModifiers()
+    const seen: boolean[] = []
+    const unsubscribe = sticky.subscribe((s) => seen.push(s.ctrl))
+    sticky.toggle('ctrl')
+    sticky.clear()
+    unsubscribe()
+    expect(sticky.state).toEqual({ ctrl: false, alt: false, fn: false })
+    expect(seen).toEqual([true, false])
+  })
+
+  it('clear() with nothing latched is a silent no-op (no spurious notify)', () => {
+    const sticky = createStickyModifiers()
+    const seen: boolean[] = []
+    const unsubscribe = sticky.subscribe((s) => seen.push(s.ctrl))
+    sticky.clear()
+    unsubscribe()
+    expect(sticky.state).toEqual({ ctrl: false, alt: false, fn: false })
+    expect(seen).toEqual([])
+  })
 })

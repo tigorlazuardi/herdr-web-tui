@@ -10,14 +10,19 @@
    * button (it used to be fixed top-right while the toggle was fixed
    * bottom-right; now both live in the same bar).
    *
-   * The toggle button now switches between two mutually exclusive input
-   * modes rather than showing/hiding the key bar independently of the
-   * promptbox — `inputMode` is `$bindable` so this component can both
-   * display and flip it, but the state itself lives in App.svelte (the
-   * single owner; Promptbox/KeyBar read it as a plain controlled prop) —
-   * see App.svelte's doc comment.
+   * The toggle button now CYCLES through three input modes (promptbox ->
+   * keys -> termux -> promptbox) rather than switching between two —
+   * `inputMode` is `$bindable` so this component can both display and
+   * advance it, but the state itself lives in App.svelte (the single
+   * owner; Promptbox/KeyBar read it as a plain controlled prop) — see
+   * App.svelte's doc comment. The button shows an icon + a short text
+   * label naming the CURRENT mode (not the mode a tap switches to, unlike
+   * the old two-mode label) since a bare glyph doesn't scale to
+   * disambiguating three states at a glance.
    */
   import type { ConnectionState, TerminalBridge } from '../lib/terminal'
+
+  type InputMode = 'promptbox' | 'keys' | 'termux'
 
   let {
     bridge,
@@ -25,9 +30,27 @@
     connectionState,
   }: {
     bridge: TerminalBridge
-    inputMode: 'promptbox' | 'keys'
+    inputMode: InputMode
     connectionState: ConnectionState
   } = $props()
+
+  const NEXT_MODE: Record<InputMode, InputMode> = {
+    promptbox: 'keys',
+    keys: 'termux',
+    termux: 'promptbox',
+  }
+
+  const MODE_ICON: Record<InputMode, string> = {
+    promptbox: '✎',
+    keys: '⌨',
+    termux: '▣',
+  }
+
+  const MODE_LABEL: Record<InputMode, string> = {
+    promptbox: 'Text',
+    keys: 'Keys',
+    termux: 'Termux',
+  }
 </script>
 
 <div class="topbar" role="toolbar" aria-label="Terminal controls">
@@ -52,17 +75,18 @@
     {/if}
   </div>
 
-  <!-- Single button, two mutually-exclusive modes: aria-pressed reflects
-       "keys mode is active" and the label always names the mode a tap
-       would switch TO, not the current one. -->
+  <!-- Single button, three-way cycle: icon + label name the CURRENT mode
+       (a bare glyph can't disambiguate three states as fast as two), and
+       aria-label describes the tap action rather than the state so a
+       screen reader hears what pressing it does. -->
   <button
     class="toggle"
     type="button"
-    aria-pressed={inputMode === 'keys'}
-    aria-label={inputMode === 'keys' ? 'Switch to text input' : 'Switch to keys'}
-    onclick={() => (inputMode = inputMode === 'keys' ? 'promptbox' : 'keys')}
+    aria-label={`Input mode: ${MODE_LABEL[inputMode]} (tap to switch)`}
+    onclick={() => (inputMode = NEXT_MODE[inputMode])}
   >
-    {inputMode === 'keys' ? '✎' : '⌨'}
+    <span class="toggle-icon" aria-hidden="true">{MODE_ICON[inputMode]}</span>
+    <span class="toggle-label">{MODE_LABEL[inputMode]}</span>
   </button>
 </div>
 
@@ -83,8 +107,7 @@
     gap: 0.25rem;
   }
 
-  .font-controls button,
-  .toggle {
+  .font-controls button {
     width: 2rem;
     height: 2rem;
     border: none;
@@ -94,8 +117,25 @@
     font: 600 1rem/1 system-ui, sans-serif;
   }
 
+  /* Auto-width pill, not the old fixed 2rem circle: a text label beside
+     the icon needs to fit three different word lengths (Text/Keys/Termux)
+     without truncating or forcing a fixed width sized for the longest. */
   .toggle {
     flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    height: 2rem;
+    padding: 0 0.65rem;
+    border: none;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #e7e5e4;
+    font: 600 0.8rem/1 system-ui, sans-serif;
+    white-space: nowrap;
+  }
+
+  .toggle-icon {
     font-size: 1.1rem;
   }
 

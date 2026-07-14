@@ -182,18 +182,31 @@ export const ALTERNATES: Record<string, string> = {
  * depending on Svelte reactivity or the other's internals.
  *
  * State machine: toggle() flips exactly one flag and never clears the
- * others (Ctrl+Alt can be latched together). consume() is the only way a
- * latch clears — it always resets to all-false after computing the
- * result, whether or not any modifier was actually set, so a stray
- * consume() can never leave a stale latch armed for a later, unrelated
- * keystroke.
+ * others (Ctrl+Alt can be latched together). consume() and clear() are
+ * the only ways a latch clears. consume() always resets to all-false
+ * after computing the result, whether or not any modifier was actually
+ * set, so a stray consume() can never leave a stale latch armed for a
+ * later, unrelated keystroke. clear() is the same reset without
+ * consuming a keystroke, for "tap the terminal while a modifier is
+ * latched" — that tap isn't a character for the modifier to apply to, it's
+ * the user cancelling the one-shot chord.
  */
 export interface StickyModifiers {
   readonly state: ModifierState
   toggle(name: keyof ModifierState): void
   /** Applies the current latch to `key`, then clears the latch. */
   consume(key: string): string
-  /** Notified on every toggle() and every consume() that cleared a live latch. */
+  /**
+   * Force-clears any latched modifier without consuming a keystroke —
+   * ticket "tap TUI while Ctrl active cancels Ctrl": a plain tap on the
+   * terminal is not a keystroke for consume() to apply the modifier to,
+   * it's the user backing out of the one-shot chord entirely. No-ops (and
+   * does not notify) when nothing is latched, matching consume()'s own
+   * only-notify-on-a-live-latch rule so an unconditional call from a
+   * click handler can't spam subscribers on every ordinary tap.
+   */
+  clear(): void
+  /** Notified on every toggle() and every consume()/clear() that cleared a live latch. */
   subscribe(cb: (s: ModifierState) => void): () => void
 }
 
@@ -220,6 +233,12 @@ export function createStickyModifiers(): StickyModifiers {
         notify()
       }
       return result
+    },
+    clear() {
+      if (state.ctrl || state.alt || state.fn) {
+        state = { ctrl: false, alt: false, fn: false }
+        notify()
+      }
     },
     subscribe(cb) {
       listeners.add(cb)

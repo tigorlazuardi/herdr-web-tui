@@ -34,7 +34,16 @@
   import { sendSegments } from '../lib/send'
   import { reportClientError } from '../lib/logger'
 
-  let { client = createHttpUploadClient() }: { client?: UploadClient } = $props()
+  // hidden: keys/termux mode hides this component visually via CSS rather
+  // than App.svelte unmounting it. Unmounting would destroy `text` and
+  // `attachments` (including the uploaded File objects) every time the
+  // user switches modes, forcing a re-upload on the way back — see
+  // App.svelte's doc comment on why Promptbox stays mounted across all
+  // three inputMode values.
+  let {
+    client = createHttpUploadClient(),
+    hidden = false,
+  }: { client?: UploadClient; hidden?: boolean } = $props()
 
   // Ticket 2 (not yet built) will route the URL path to a Herdr session;
   // reading location.pathname here today costs nothing and already agrees
@@ -130,7 +139,7 @@
   }
 </script>
 
-<div class="promptbox">
+<div class="promptbox" class:hidden>
   {#if error}
     <div class="error" role="alert">
       <AlertTriangle size={16} aria-hidden="true" />
@@ -189,7 +198,7 @@
       bind:value={text}
       class="editor"
       rows="1"
-      placeholder="Type a message… tap 📎 to insert an attachment marker like §1"
+      placeholder="Type a message…"
       aria-label="Message"
       autocorrect="off"
       autocapitalize="off"
@@ -214,6 +223,12 @@
     padding: 0.5rem 0.75rem;
     background: var(--promptbox-bg, #0f172a);
     border-top: 1px solid var(--border, #1e293b);
+  }
+
+  /* keys/termux mode: hide visually, keep mounted (see the `hidden` prop's
+     doc comment) so text/attachments state survives the mode switch. */
+  .promptbox.hidden {
+    display: none;
   }
 
   .error {
