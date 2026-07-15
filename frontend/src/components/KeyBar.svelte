@@ -33,6 +33,24 @@
     bridge.sendInput(sticky.consume(key))
   }
 
+  // Modifier taps (Ctrl/Alt/Fn) are the opposite case from press() above:
+  // they DO need to pop the soft keyboard, for the one follow-up character
+  // (e.g. Ctrl then "c" for \x03). Mobile browsers only raise the on-screen
+  // keyboard from a focus() called synchronously inside a real user-gesture
+  // handler — App.svelte's $effect reacting to the latch runs later, in a
+  // microtask/effect flush, which browsers ignore for keyboard purposes. So
+  // the open must happen right here, synchronously, in this onclick. The
+  // effect is left in place: it still handles closing the keyboard once the
+  // latch clears (see App.svelte), and reopening it here first is a
+  // harmless no-op by the time the effect re-runs.
+  function toggleMod(name: 'ctrl' | 'alt' | 'fn') {
+    sticky.toggle(name)
+    if (sticky.state[name]) {
+      bridge.restoreKeyboard()
+      bridge.focus()
+    }
+  }
+
   // Long-press -> alternate character (design doc: "long-press for
   // alternates" on row-2 punctuation). 500ms matches common mobile
   // long-press thresholds; not configurable because no caller needs it to
@@ -89,7 +107,7 @@
       type="button"
       class="mod"
       aria-pressed={mods.ctrl}
-      onclick={() => sticky.toggle('ctrl')}
+      onclick={() => toggleMod('ctrl')}
     >
       Ctrl
     </button>
@@ -97,7 +115,7 @@
       type="button"
       class="mod"
       aria-pressed={mods.alt}
-      onclick={() => sticky.toggle('alt')}
+      onclick={() => toggleMod('alt')}
     >
       Alt
     </button>
@@ -106,7 +124,7 @@
       type="button"
       class="mod"
       aria-pressed={mods.fn}
-      onclick={() => sticky.toggle('fn')}
+      onclick={() => toggleMod('fn')}
     >
       Fn
     </button>
