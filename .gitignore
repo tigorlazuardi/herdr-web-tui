@@ -3,3 +3,4 @@
 /frontend/node_modules
 /.pi/taskflows/runs/
 result
+.pi/remote-pi/
