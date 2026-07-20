@@ -24,13 +24,22 @@ describe('clampFontSize', () => {
 })
 
 describe('openKeyboard', () => {
-  it('sets text input mode, resets focus, then focuses textarea', () => {
+  it('applies text input mode before resetting focus on the next frame', () => {
     const calls: string[] = []
-    openKeyboard({
-      setAttribute: (name, value) => calls.push(`set:${name}=${value}`),
-      blur: () => calls.push('blur'),
-      focus: () => calls.push('focus'),
-    })
+    let scheduled: (() => void) | undefined
+    openKeyboard(
+      {
+        setAttribute: (name, value) => calls.push(`set:${name}=${value}`),
+        blur: () => calls.push('blur'),
+        focus: () => calls.push('focus'),
+      },
+      (cb) => {
+        scheduled = cb
+        return 1
+      },
+    )
+    expect(calls).toEqual(['set:inputmode=text'])
+    scheduled?.()
     expect(calls).toEqual(['set:inputmode=text', 'blur', 'focus'])
   })
 })

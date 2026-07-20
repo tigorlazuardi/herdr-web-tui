@@ -127,12 +127,22 @@ export function readStoredFontSize(raw: string | null): number {
   return parsed
 }
 
-/** Restores an explicit text input mode and focuses xterm's actual textarea. */
-export function openKeyboard(textarea: Pick<HTMLTextAreaElement, 'setAttribute' | 'blur' | 'focus'> | undefined) {
+/**
+ * Restores text input, then re-focuses after Chromium applies inputmode.
+ * `inputmode="none"` is cached for the current focus transition on mobile;
+ * focusing in the same task leaves the IME hidden. Termux mode proves this
+ * browser permits async focus, so one animation frame is the minimal reset.
+ */
+export function openKeyboard(
+  textarea: Pick<HTMLTextAreaElement, 'setAttribute' | 'blur' | 'focus'> | undefined,
+  schedule: (cb: () => void) => number = requestAnimationFrame,
+) {
   if (!textarea) return
   textarea.setAttribute('inputmode', 'text')
-  textarea.blur()
-  textarea.focus()
+  schedule(() => {
+    textarea.blur()
+    textarea.focus()
+  })
 }
 
 /**
