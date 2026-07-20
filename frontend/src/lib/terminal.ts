@@ -64,6 +64,8 @@ export interface TerminalBridge {
   sendInput(text: string): void
   /** Refocuses xterm's hidden textarea, e.g. after a key-bar button steals focus. */
   focus(): void
+  /** Opens mobile IME from a synchronous user-gesture handler. */
+  openKeyboard(): void
   /**
    * Dismisses the soft keyboard by blurring xterm's hidden textarea — used
    * when switching to keys mode so the accessory bar isn't fighting the
@@ -123,6 +125,14 @@ export function readStoredFontSize(raw: string | null): number {
     return DEFAULT_FONT_SIZE
   }
   return parsed
+}
+
+/** Restores an explicit text input mode and focuses xterm's actual textarea. */
+export function openKeyboard(textarea: Pick<HTMLTextAreaElement, 'setAttribute' | 'blur' | 'focus'> | undefined) {
+  if (!textarea) return
+  textarea.setAttribute('inputmode', 'text')
+  textarea.blur()
+  textarea.focus()
 }
 
 /**
@@ -413,6 +423,9 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
     },
     focus() {
       term.focus()
+    },
+    openKeyboard() {
+      openKeyboard(term.textarea)
     },
     blur() {
       term.blur()

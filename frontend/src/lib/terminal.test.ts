@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampFontSize, readStoredFontSize } from './terminal'
+import { clampFontSize, openKeyboard, readStoredFontSize } from './terminal'
 
 // Only the font +/- lever's clamp logic is pure/testable without a DOM +
 // WebSocket (see clampFontSize's doc comment in terminal.ts); the rest of
@@ -20,6 +20,18 @@ describe('clampFontSize', () => {
 
   it('ceilings at MAX_FONT_SIZE (32)', () => {
     expect(clampFontSize(32, 1)).toBe(32)
+  })
+})
+
+describe('openKeyboard', () => {
+  it('sets text input mode, resets focus, then focuses textarea', () => {
+    const calls: string[] = []
+    openKeyboard({
+      setAttribute: (name, value) => calls.push(`set:${name}=${value}`),
+      blur: () => calls.push('blur'),
+      focus: () => calls.push('focus'),
+    })
+    expect(calls).toEqual(['set:inputmode=text', 'blur', 'focus'])
   })
 })
 

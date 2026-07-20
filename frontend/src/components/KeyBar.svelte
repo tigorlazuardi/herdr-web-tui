@@ -46,8 +46,7 @@
   function toggleMod(name: 'ctrl' | 'alt' | 'fn') {
     sticky.toggle(name)
     if (sticky.state[name]) {
-      bridge.restoreKeyboard()
-      bridge.focus()
+      bridge.openKeyboard()
     }
   }
 
