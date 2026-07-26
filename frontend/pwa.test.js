@@ -8,6 +8,11 @@ const pngSize = (name) => {
 }
 
 describe('PWA install metadata', () => {
+  test('sends auth credentials when loading the protected manifest', () => {
+    const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8')
+    expect(html).toContain('rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials"')
+  })
+
   test('references valid Android icon sizes', () => {
     const manifest = JSON.parse(publicFile('manifest.webmanifest').toString())
 
