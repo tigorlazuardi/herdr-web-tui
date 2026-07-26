@@ -2,7 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <!-- user-scalable=no: kills touch/long-press zoom so Herdr's own
          click/tap handling isn't fought by the browser's pinch-zoom, and
          keeps columns tracking the real device width (design doc,
@@ -15,12 +16,8 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content"
     />
-    <!-- PWA install (ticket 3, design doc "Frontend requirements"):
-         display:standalone in manifest.json drops the browser chrome so
-         the URL bar doesn't eat rows on a phone; theme-color and the
-         apple-mobile-web-app-* trio give iOS/Android the same fullscreen,
-         home-screen-app treatment without a separate native shell. -->
-    <link rel="manifest" href="/manifest.json" />
+    <!-- ponytail: install metadata only; add a service worker when offline use is required. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#000000" />
     <meta name="application-name" content="herdr" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

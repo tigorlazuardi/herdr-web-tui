@@ -12,7 +12,7 @@
   import Promptbox from './components/Promptbox.svelte'
 
   let container: HTMLDivElement
-  let state = $state<ConnectionState>('connecting')
+  let connectionState = $state<ConnectionState>('connecting')
 
   // Shared between the terminal bridge (consulted on every soft-keyboard
   // keystroke via term.onData) and KeyBar (toggled/read for the UI
@@ -95,7 +95,7 @@
 
   onMount(() => {
     const unsubStickyMods = sticky.subscribe((s) => (mods = s))
-    const unsubscribe = bridge.onStateChange((s) => (state = s))
+    const unsubscribe = bridge.onStateChange((s) => (connectionState = s))
     bridge.attach(container)
     return () => {
       unsubscribe()
@@ -133,7 +133,7 @@
        can be in the DOM at once. Nothing here is position:fixed over
        another element in this stack — that's what let the old floating
        key bar cover the promptbox (issue #2). -->
-  <Topbar {bridge} bind:inputMode connectionState={state} />
+  <Topbar {bridge} bind:inputMode {connectionState} />
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- This div isn't a keyboard-operable control; it's xterm's own mount

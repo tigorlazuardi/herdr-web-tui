@@ -200,7 +200,7 @@
       rows="1"
       placeholder="Type a message…"
       aria-label="Message"
-      autocorrect="off"
+      {...{ autocorrect: 'off' }}
       autocapitalize="off"
       autocomplete="off"
       spellcheck="false"
