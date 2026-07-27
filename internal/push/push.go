@@ -574,7 +574,35 @@ func readHerdrResponse(scan *bufio.Scanner, expectedID string, result any) error
 	return nil
 }
 
-// focusPane uses one raw Herdr socket and never interpolates paneID into shell or method names.
+// herdrRoundTrip owns one protocol-16 connection for exactly one request and response.
+func (s *Service) herdrRoundTrip(ctx context.Context, path, phase string, request herdrRequest, result any) error {
+	raw, err := s.dial(ctx, "unix", path)
+	if err != nil {
+		return errors.Wrapf(err, "connect Herdr %s socket", phase)
+	}
+	conn := newEventConn(ctx, raw)
+	defer conn.Close()
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.Wrapf(err, "request Herdr %s", phase)
+	}
+	scan := bufio.NewScanner(conn)
+	scan.Buffer(make([]byte, 4096), maxHerdrFrame)
+	if err := readHerdrResponse(scan, request.ID, result); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.Wrapf(err, "receive Herdr %s", phase)
+	}
+	if err := conn.Close(); err != nil {
+		return errors.Wrapf(err, "close Herdr %s socket", phase)
+	}
+	return nil
+}
+
+// focusPane verifies pane existence, then focuses it over a fresh protocol-16 connection.
 func (s *Service) focusPane(ctx context.Context, paneID string) error {
 	path := s.socketPath
 	if path == "" {
@@ -583,24 +611,9 @@ func (s *Service) focusPane(ctx context.Context, paneID string) error {
 	if path == "" {
 		return errors.New("HERDR_SOCKET_PATH is required")
 	}
-	conn, err := s.dial(ctx, "unix", path)
-	if err != nil {
-		return errors.Wrap(err, "connect Herdr socket")
-	}
-	defer conn.Close()
-	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stopClose()
-	if err := json.NewEncoder(conn).Encode(herdrRequest{ID: "focus-snapshot", Method: "session.snapshot", Params: map[string]any{}}); err != nil {
-		return errors.Wrap(err, "request Herdr snapshot")
-	}
-	scan := bufio.NewScanner(conn)
-	scan.Buffer(make([]byte, 4096), maxHerdrFrame)
 	var snap focusSnapshotResult
-	if err := readHerdrResponse(scan, "focus-snapshot", &snap); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return errors.Wrap(err, "receive Herdr snapshot")
+	if err := s.herdrRoundTrip(ctx, path, "snapshot", herdrRequest{ID: "focus-snapshot", Method: "session.snapshot", Params: map[string]any{}}, &snap); err != nil {
+		return err
 	}
 	if snap.Type != "session_snapshot" {
 		return errors.Wrap(errHerdrProtocol, "unexpected snapshot result type")
@@ -608,30 +621,20 @@ func (s *Service) focusPane(ctx context.Context, paneID string) error {
 	if snap.Snapshot == nil || snap.Snapshot.Version == nil || snap.Snapshot.Protocol == nil || *snap.Snapshot.Protocol != 16 || snap.Snapshot.Workspaces == nil || snap.Snapshot.Tabs == nil || snap.Snapshot.Panes == nil || snap.Snapshot.Layouts == nil || snap.Snapshot.Agents == nil {
 		return errors.Wrap(errHerdrProtocol, "snapshot result missing required shape")
 	}
-	found := false
 	for _, pane := range snap.Snapshot.Panes {
-		if pane.PaneID == paneID {
-			found = true
-			break
+		if pane.PaneID != paneID {
+			continue
 		}
-	}
-	if !found {
-		return errPaneNotFound
-	}
-	if err := json.NewEncoder(conn).Encode(herdrRequest{ID: "focus-pane", Method: "pane.focus", Params: map[string]any{"pane_id": paneID}}); err != nil {
-		return errors.Wrap(err, "request Herdr pane focus")
-	}
-	var focused focusOKResult
-	if err := readHerdrResponse(scan, "focus-pane", &focused); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		var focused focusOKResult
+		if err := s.herdrRoundTrip(ctx, path, "pane focus", herdrRequest{ID: "focus-pane", Method: "pane.focus", Params: map[string]any{"pane_id": paneID}}, &focused); err != nil {
+			return err
 		}
-		return errors.Wrap(err, "receive Herdr pane focus result")
+		if focused.Type != "ok" {
+			return errors.Wrap(errHerdrProtocol, "unexpected focus result type")
+		}
+		return nil
 	}
-	if focused.Type != "ok" {
-		return errors.Wrap(errHerdrProtocol, "unexpected focus result type")
-	}
-	return nil
+	return errPaneNotFound
 }
 
 // del removes only the authenticated user's subscription.

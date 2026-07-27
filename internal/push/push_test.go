@@ -425,24 +425,26 @@ func TestFocusAPIValidatesAuthenticatesAndUsesVerifiedSocketRequest(t *testing.T
 	svc, _ := testService(t)
 	var logs bytes.Buffer
 	svc.log = slog.New(slog.NewTextHandler(&logs, nil))
-	client, server := net.Pipe()
-	svc.dial = func(context.Context, string, string) (net.Conn, error) { return client, nil }
+	snapshotClient, snapshotServer := net.Pipe()
+	focusClient, focusServer := net.Pipe()
+	connections := make(chan net.Conn, 2)
+	connections <- snapshotClient
+	connections <- focusClient
+	svc.dial = func(context.Context, string, string) (net.Conn, error) { return <-connections, nil }
 	svc.SetSocketPath("test.sock")
 	requests := make(chan map[string]any, 2)
-	go func() {
+	serve := func(server net.Conn, response string) {
 		defer server.Close()
 		scan := bufio.NewScanner(server)
-		for scan.Scan() {
+		if scan.Scan() {
 			var request map[string]any
 			_ = json.Unmarshal(scan.Bytes(), &request)
 			requests <- request
-			if request["method"] == "session.snapshot" {
-				_, _ = io.WriteString(server, `{"id":"focus-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"w1:p2","terminal_id":"t1","workspace_id":"w1","tab_id":"tab1","focused":false,"agent_status":"idle","revision":1}],"layouts":[],"agents":[]}}}`+"\n")
-			} else {
-				_, _ = io.WriteString(server, `{"id":"focus-pane","result":{"type":"ok"}}`+"\n")
-			}
+			_, _ = io.WriteString(server, response+"\n")
 		}
-	}()
+	}
+	go serve(snapshotServer, `{"id":"focus-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"w1:p2","terminal_id":"t1","workspace_id":"w1","tab_id":"tab1","focused":false,"agent_status":"idle","revision":1}],"layouts":[],"agents":[]}}}`)
+	go serve(focusServer, `{"id":"focus-pane","result":{"type":"ok"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/push/focus", strings.NewReader(`{"pane_id":"w1:p2"}`))
 	req.Header.Set("Remote-User", "alice")
 	req.Header.Set("Content-Type", "application/json")
@@ -480,6 +482,92 @@ func TestFocusAPIValidatesAuthenticatesAndUsesVerifiedSocketRequest(t *testing.T
 				t.Fatalf("code=%d want=%d", response.Code, test.want)
 			}
 		})
+	}
+}
+
+func TestFocusPane_FreshConnection_FocusSucceeds(t *testing.T) {
+	svc, _ := testService(t)
+	snapshotClient, snapshotServer := net.Pipe()
+	focusClient, focusServer := net.Pipe()
+	ownedSnapshot := &countingConn{Conn: snapshotClient, closed: make(chan struct{})}
+	ownedFocus := &countingConn{Conn: focusClient, closed: make(chan struct{})}
+	connections := make(chan net.Conn, 2)
+	connections <- ownedSnapshot
+	connections <- ownedFocus
+	var dials atomic.Int32
+	svc.dial = func(context.Context, string, string) (net.Conn, error) {
+		if dials.Add(1) == 2 && ownedSnapshot.closes.Load() != 1 {
+			t.Fatalf("snapshot close count before focus dial=%d want 1", ownedSnapshot.closes.Load())
+		}
+		return <-connections, nil
+	}
+	svc.SetSocketPath("test.sock")
+
+	go func() {
+		defer snapshotServer.Close()
+		scan := bufio.NewScanner(snapshotServer)
+		if scan.Scan() {
+			_, _ = io.WriteString(snapshotServer, `{"id":"focus-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"w1:p2"}],"layouts":[],"agents":[]}}}`+"\n")
+		}
+	}()
+	focusRequest := make(chan herdrRequest, 1)
+	go func() {
+		defer focusServer.Close()
+		var request herdrRequest
+		if json.NewDecoder(focusServer).Decode(&request) == nil {
+			focusRequest <- request
+			_, _ = io.WriteString(focusServer, `{"id":"focus-pane","result":{"type":"ok"}}`+"\n")
+		}
+	}()
+
+	if err := svc.focusPane(context.Background(), "w1:p2"); err != nil {
+		t.Fatal(err)
+	}
+	request := <-focusRequest
+	if dials.Load() != 2 || request.Method != "pane.focus" || request.Params["pane_id"] != "w1:p2" {
+		t.Fatalf("dials=%d request=%#v", dials.Load(), request)
+	}
+	if snapshotCloses, focusCloses := ownedSnapshot.closes.Load(), ownedFocus.closes.Load(); snapshotCloses != 1 || focusCloses != 1 {
+		t.Fatalf("final close counts: snapshot=%d focus=%d want 1 each", snapshotCloses, focusCloses)
+	}
+}
+
+func TestFocusPane_ContextCanceledDuringFocus_ClosesConnectionOnce(t *testing.T) {
+	svc, _ := testService(t)
+	snapshotClient, snapshotServer := net.Pipe()
+	focusClient, focusServer := net.Pipe()
+	ownedFocus := &countingConn{Conn: focusClient, closed: make(chan struct{})}
+	connections := make(chan net.Conn, 2)
+	connections <- snapshotClient
+	connections <- ownedFocus
+	svc.dial = func(context.Context, string, string) (net.Conn, error) { return <-connections, nil }
+	svc.SetSocketPath("test.sock")
+	go func() {
+		defer snapshotServer.Close()
+		buf := make([]byte, 1024)
+		if _, err := snapshotServer.Read(buf); err == nil {
+			_, _ = io.WriteString(snapshotServer, `{"id":"focus-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"w1:p2"}],"layouts":[],"agents":[]}}}`+"\n")
+		}
+	}()
+	focusRead := make(chan struct{})
+	go func() {
+		defer focusServer.Close()
+		buf := make([]byte, 1024)
+		if _, err := focusServer.Read(buf); err == nil {
+			close(focusRead)
+			<-ownedFocus.closed
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- svc.focusPane(ctx, "w1:p2") }()
+	<-focusRead
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation classification lost: %v", err)
+	}
+	if got := ownedFocus.closes.Load(); got != 1 {
+		t.Fatalf("focus close count=%d want 1", got)
 	}
 }
 
@@ -528,21 +616,28 @@ func TestFocusPaneRejectsInvalidProtocolFrames(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			svc, _ := testService(t)
-			client, server := net.Pipe()
-			svc.dial = func(context.Context, string, string) (net.Conn, error) { return client, nil }
+			snapshotClient, snapshotServer := net.Pipe()
+			connections := make(chan net.Conn, 2)
+			connections <- snapshotClient
+			servers := []net.Conn{snapshotServer}
+			if test.focus != "" {
+				focusClient, focusServer := net.Pipe()
+				connections <- focusClient
+				servers = append(servers, focusServer)
+			}
+			svc.dial = func(context.Context, string, string) (net.Conn, error) { return <-connections, nil }
 			svc.SetSocketPath("test.sock")
-			go func() {
-				defer server.Close()
-				scan := bufio.NewScanner(server)
-				if !scan.Scan() || test.snapshot == "" {
-					return
-				}
-				_, _ = io.WriteString(server, test.snapshot+"\n")
-				if !scan.Scan() || test.focus == "" {
-					return
-				}
-				_, _ = io.WriteString(server, test.focus+"\n")
-			}()
+			responses := []string{test.snapshot, test.focus}
+			for i, server := range servers {
+				response := responses[i]
+				go func() {
+					defer server.Close()
+					buf := make([]byte, 1024)
+					if _, err := server.Read(buf); err == nil && response != "" {
+						_, _ = io.WriteString(server, response+"\n")
+					}
+				}()
+			}
 			if err := svc.focusPane(context.Background(), "w1:p2"); err == nil || strings.Contains(err.Error(), "w1:p2") {
 				t.Fatalf("unsafe or missing error: %v", err)
 			}
