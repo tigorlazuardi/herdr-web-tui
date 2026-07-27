@@ -196,7 +196,7 @@ name (`cmd/herdr-web-tui/main.go`, `envOr`); the flag wins if both are set.
 | `--tmp-prefix` | `TMP_PREFIX` | `herdr-web-tui` | Prefix for the artifact staging directory. |
 
 **Artifact staging path.** `--tmp-prefix` (or `TMP_PREFIX`) becomes
-`os.TempDir()/<prefix>-<os-username-of-the-process>` (`internal/artifact.DefaultDir`),
+`os.TempDir()/<prefix>-<numeric-effective-uid>` (`internal/artifact.DefaultDir`, equivalent to `id -u`),
 created `0700` on startup if missing. `/send` writes every uploaded file here,
 flat, as `<xid>[.ext]` (`internal/artifact.SaveFile`) before injecting the
 resolved path into the pane.

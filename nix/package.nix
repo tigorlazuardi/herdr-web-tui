@@ -9,7 +9,7 @@ let
 
   frontend = buildNpmPackage {
     pname = "herdr-web-tui-frontend";
-    version = "0.2.0";
+    version = "0.2.1";
     src = ../frontend;
     npmDepsHash = "sha256-r9v19k5899W7qJ12qemtfjqb1yzPJtWHDtpIT0Ro+4c=";
     installPhase = ''
@@ -21,7 +21,7 @@ let
 in
 buildGoModule {
   pname = "herdr-web-tui";
-  version = "0.2.0";
+  version = "0.2.1";
   inherit src;
 
   vendorHash = "sha256-RZj/UHO9rNxPOa5Prd93mj5/U8Re5KOQaAF3suy+KBU=";
