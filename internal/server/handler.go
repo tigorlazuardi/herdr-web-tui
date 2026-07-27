@@ -24,6 +24,7 @@ func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, staging
 	mux.Handle("/send", newSendHandler(herdr, stagingDir, logger))
 	mux.Handle("/clientlog", newClientlogHandler(logger))
 	mux.Handle("/ws", newPTYHandler(logger))
+	mux.Handle("/manifest.webmanifest", newManifestHandler())
 	mux.Handle("/", newStaticHandler(fsys))
 
 	var h http.Handler = mux

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -154,6 +155,51 @@ func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
 	cc := rec.Header().Get("Cache-Control")
 	if !strings.Contains(cc, "max-age=31536000") || !strings.Contains(cc, "immutable") {
 		t.Fatalf("expected long immutable cache on hashed asset, got %q", cc)
+	}
+}
+
+func TestManifest_IsUniquePerAuthenticatedUser(t *testing.T) {
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+	get := func(user string) manifest {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil)
+		req.Header.Set("Remote-User", user)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "application/manifest+json" {
+			t.Fatalf("unexpected content type %q", got)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "private, no-store" {
+			t.Fatalf("unexpected cache control %q", got)
+		}
+		if got := rec.Header().Get("Vary"); got != "Remote-User" {
+			t.Fatalf("unexpected vary header %q", got)
+		}
+		var m manifest
+		if err := json.NewDecoder(rec.Body).Decode(&m); err != nil {
+			t.Fatalf("decode manifest: %v", err)
+		}
+		return m
+	}
+
+	fallback := get("")
+	alice := get("alice")
+	bob := get("bob")
+	if fallback.ID != "" || fallback.Name != "Herdr Web TUI" {
+		t.Fatalf("unexpected unauthenticated fallback: %+v", fallback)
+	}
+	if alice.ID == "" || alice.ID == bob.ID {
+		t.Fatalf("expected unique non-empty ids, got %q and %q", alice.ID, bob.ID)
+	}
+	if alice.Name != "Herdr — alice" {
+		t.Fatalf("unexpected name %q", alice.Name)
+	}
+	if alice.Display != "standalone" || len(alice.Icons) != 2 || alice.Icons[0].Src != "/icon-192.png" || alice.Icons[1].Src != "/icon-512.png" {
+		t.Fatalf("unexpected install metadata: %+v", alice)
 	}
 }
 

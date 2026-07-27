@@ -1,6 +1,9 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path"
@@ -67,4 +70,55 @@ func setCacheHeaders(w http.ResponseWriter, urlPath string) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
+}
+
+type manifest struct {
+	ID              string         `json:"id,omitempty"`
+	Name            string         `json:"name"`
+	Description     string         `json:"description"`
+	StartURL        string         `json:"start_url"`
+	Scope           string         `json:"scope"`
+	Display         string         `json:"display"`
+	BackgroundColor string         `json:"background_color"`
+	ThemeColor      string         `json:"theme_color"`
+	Icons           []manifestIcon `json:"icons"`
+}
+
+type manifestIcon struct {
+	Src     string `json:"src"`
+	Sizes   string `json:"sizes"`
+	Type    string `json:"type"`
+	Purpose string `json:"purpose"`
+}
+
+func newManifestHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := "Herdr Web TUI"
+		user := strings.TrimSpace(r.Header.Get("Remote-User"))
+		if user != "" {
+			name = "Herdr — " + user
+		}
+
+		m := manifest{
+			Name:            name,
+			Description:     "Live Herdr TUI in the browser",
+			StartURL:        "/",
+			Scope:           "/",
+			Display:         "standalone",
+			BackgroundColor: "#000000",
+			ThemeColor:      "#000000",
+			Icons: []manifestIcon{
+				{Src: "/icon-192.png", Sizes: "192x192", Type: "image/png", Purpose: "any"},
+				{Src: "/icon-512.png", Sizes: "512x512", Type: "image/png", Purpose: "any"},
+			},
+		}
+		if user != "" {
+			m.ID = fmt.Sprintf("/pwa/%x", sha256.Sum256([]byte(user)))
+		}
+
+		w.Header().Set("Cache-Control", "private, no-store")
+		w.Header().Set("Content-Type", "application/manifest+json")
+		w.Header().Set("Vary", "Remote-User")
+		_ = json.NewEncoder(w).Encode(m)
+	})
 }

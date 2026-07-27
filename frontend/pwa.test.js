@@ -13,14 +13,7 @@ describe('PWA install metadata', () => {
     expect(html).toContain('rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials"')
   })
 
-  test('references valid Android icon sizes', () => {
-    const manifest = JSON.parse(publicFile('manifest.webmanifest').toString())
-
-    expect(manifest.display).toBe('standalone')
-    expect(manifest.icons.map(({ src, sizes }) => [src, sizes])).toEqual([
-      ['/icon-192.png', '192x192'],
-      ['/icon-512.png', '512x512'],
-    ])
+  test('ships valid Android icon sizes', () => {
     expect(pngSize('icon-192.png')).toEqual([192, 192])
     expect(pngSize('icon-512.png')).toEqual([512, 512])
   })
