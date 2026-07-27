@@ -28,10 +28,12 @@
     bridge,
     inputMode = $bindable(),
     connectionState,
+    wakeLockUnavailable,
   }: {
     bridge: TerminalBridge
     inputMode: InputMode
     connectionState: ConnectionState
+    wakeLockUnavailable: boolean
   } = $props()
 
   const NEXT_MODE: Record<InputMode, InputMode> = {
@@ -72,6 +74,8 @@
       <span class="status" role="status">
         {connectionState === 'connecting' ? 'Connecting…' : 'Reconnecting…'}
       </span>
+    {:else if wakeLockUnavailable}
+      <span class="status warning" role="status">Screen may sleep</span>
     {/if}
   </div>
 
@@ -152,5 +156,9 @@
     background: #f59e0b;
     color: #1c1917;
     font: 500 0.75rem/1.4 system-ui, sans-serif;
+  }
+
+  .warning {
+    background: #fca5a5;
   }
 </style>
