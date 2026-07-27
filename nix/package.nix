@@ -9,7 +9,7 @@ let
 
   frontend = buildNpmPackage {
     pname = "herdr-web-tui-frontend";
-    version = "0.1.4";
+    version = "0.2.0";
     src = ../frontend;
     npmDepsHash = "sha256-r9v19k5899W7qJ12qemtfjqb1yzPJtWHDtpIT0Ro+4c=";
     installPhase = ''
@@ -21,10 +21,10 @@ let
 in
 buildGoModule {
   pname = "herdr-web-tui";
-  version = "0.1.4";
+  version = "0.2.0";
   inherit src;
 
-  vendorHash = "sha256-y5u8L9gxP8RV5Sx43Cl1VLFyycAqu8ifP7bw/RSbKaM=";
+  vendorHash = "sha256-RZj/UHO9rNxPOa5Prd93mj5/U8Re5KOQaAF3suy+KBU=";
 
   # dist.go embeds frontend/dist; supply the prebuilt frontend so `go build`
   # (which runs //go:embed all:frontend/dist) has something to embed.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrclient"
+	"github.com/tigorlazuardi/herdr-web-tui/internal/push"
 )
 
 // New assembles the full request handler: the artifact-inject API routes
@@ -19,8 +20,11 @@ import (
 // the HerdrClient /send injects through (production: herdrclient.NewExecHerdrClient;
 // tests: a fake); stagingDir is the flat directory /send saves uploads into
 // (production: artifact.DefaultDir's result; tests: t.TempDir()).
-func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, stagingDir string) http.Handler {
+func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, stagingDir string, pushService ...*push.Service) http.Handler {
 	mux := http.NewServeMux()
+	if len(pushService) > 0 && pushService[0] != nil {
+		mux.Handle("/api/push/", pushService[0].Handler())
+	}
 	mux.Handle("/send", newSendHandler(herdr, stagingDir, logger))
 	mux.Handle("/clientlog", newClientlogHandler(logger))
 	mux.Handle("/ws", newPTYHandler(logger))

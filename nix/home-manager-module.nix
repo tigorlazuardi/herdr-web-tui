@@ -63,7 +63,23 @@ in
     environment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
-      description = "Extra environment variables for the service.";
+      description = ''
+        Extra non-secret environment variables for the service.
+        Never put `VAPID_PRIVATE_KEY` here: Nix values can leak into the store
+        or generated unit. Use `webPush.environmentFile` instead.
+      '';
+    };
+
+    webPush.environmentFile = lib.mkOption {
+      type = lib.types.nullOr (lib.types.strMatching "^/.*");
+      default = null;
+      example = "/run/user/1000/secrets/herdr-web-push.env";
+      description = ''
+        Absolute runtime path to a systemd EnvironmentFile containing Web Push
+        configuration, suitable for sops-nix or agenix output. The file is
+        required when configured, so a missing or unreadable file prevents the
+        service from starting. Keep VAPID private keys out of Nix values.
+      '';
     };
   };
 
@@ -90,6 +106,8 @@ in
             TMP_PREFIX = cfg.tmpPrefix;
             PATH = "${herdrPkg}/bin";
           } // cfg.environment);
+        } // lib.optionalAttrs (cfg.webPush.environmentFile != null) {
+          EnvironmentFile = cfg.webPush.environmentFile;
         };
       };
     }

@@ -22,7 +22,9 @@ import (
 	"github.com/tigorlazuardi/herdr-web-tui/internal/artifact"
 	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrclient"
 	"github.com/tigorlazuardi/herdr-web-tui/internal/logger"
+	"github.com/tigorlazuardi/herdr-web-tui/internal/push"
 	"github.com/tigorlazuardi/herdr-web-tui/internal/server"
+	"github.com/tigorlazuardi/herdr-web-tui/internal/telemetry"
 )
 
 func main() {
@@ -39,7 +41,8 @@ func run() error {
 	flag.Parse()
 
 	isTTY := isTerminal(os.Stdout)
-	log := logger.New(*logFormat, isTTY)
+	baseLog := logger.New(*logFormat, isTTY)
+	log := slog.New(telemetry.CorrelatingHandler{Handler: baseLog.Handler()})
 
 	distFS, err := fs.Sub(dist.FS, "frontend/dist")
 	if err != nil {
@@ -50,15 +53,38 @@ func run() error {
 		return errors.Wrap(err, "resolve artifact staging dir")
 	}
 	herdr := herdrclient.NewExecHerdrClient(log)
-	handler := server.New(distFS, log, herdr, stagingDir)
+	pushConfig, pushStore, err := loadPush(log)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	shutdownTelemetry, err := telemetry.Setup(ctx, log)
+	if err != nil {
+		return errors.Wrap(err, "initialize OpenTelemetry")
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
+	pushService := push.NewService(pushConfig, pushStore, log)
+	pushService.SetSocketPath(os.Getenv("HERDR_SOCKET_PATH"))
+	log.Info("Web Push configuration ready", "enabled", pushConfig.Enabled(), "vapid.private_key", "<redacted>")
+	if pushConfig.Enabled() {
+		go func() {
+			if err := pushService.RunEvents(ctx, os.Getenv("HERDR_SOCKET_PATH")); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("Web Push event subscriber stopped", "error", err)
+			}
+		}()
+	}
+	handler := server.New(distFS, log, herdr, stagingDir, pushService)
 
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: handler,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -80,6 +106,21 @@ func run() error {
 		}
 	}
 	return nil
+}
+
+// loadPush validates configuration and opens persistence before network readiness, logging redacted structured failure details.
+func loadPush(log *slog.Logger) (push.Config, *push.Store, error) {
+	config, err := push.ConfigFromEnv()
+	if err != nil {
+		log.Error("Web Push configuration failed", "error.kind", "invalid_config", "vapid.public_key", "<redacted>", "vapid.private_key", "<redacted>", "vapid.subject", "<redacted>")
+		return push.Config{}, nil, errors.Wrap(err, "Web Push configuration")
+	}
+	store, err := push.OpenStore(config.StorePath)
+	if err != nil {
+		log.Error("Web Push configuration failed", "error.kind", "store_open", "web_push.store_path", "<redacted>")
+		return push.Config{}, nil, errors.Wrap(err, "open Web Push store")
+	}
+	return config, store, nil
 }
 
 // envOr returns the environment variable's value, or def if unset.

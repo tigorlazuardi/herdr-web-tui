@@ -21,6 +21,7 @@
    * disambiguating three states at a glance.
    */
   import type { ConnectionState, TerminalBridge } from '../lib/terminal'
+  import PushControl from './PushControl.svelte'
 
   type InputMode = 'promptbox' | 'keys' | 'termux'
 
@@ -70,6 +71,7 @@
   </div>
 
   <div class="spacer">
+    <PushControl />
     {#if connectionState !== 'open'}
       <span class="status" role="status">
         {connectionState === 'connecting' ? 'Connecting…' : 'Reconnecting…'}
