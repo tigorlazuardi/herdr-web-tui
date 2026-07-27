@@ -98,6 +98,29 @@ const DEFAULT_FONT_SIZE = 15
 const MIN_FONT_SIZE = 8
 const MAX_FONT_SIZE = 32
 
+// System monospace draws normal terminal text; bundled font fills its missing
+// Nerd Font private-use glyphs.
+export const TERMINAL_FONT_FAMILY =
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", "Symbols Nerd Font Mono", monospace'
+
+export const TERMINAL_FONT_SAMPLE = '\uE0B0\u{F0001}'
+
+type FontLoader = Pick<FontFaceSet, 'load'>
+
+export function loadTerminalFont(fonts: FontLoader = document.fonts): Promise<void> {
+  return fonts.load(`${DEFAULT_FONT_SIZE}px "Symbols Nerd Font Mono"`, TERMINAL_FONT_SAMPLE).then(() => undefined).catch(() => undefined)
+}
+
+// ponytail: one small seam tests browser-font gating without an xterm mock.
+export async function initializeAfterTerminalFont(
+  fonts: FontLoader,
+  isClosed: () => boolean,
+  initialize: () => void,
+): Promise<void> {
+  await loadTerminalFont(fonts)
+  if (!isClosed()) initialize()
+}
+
 /**
  * Pure clamp for the font +/- lever, split out from adjustFontSize so it's
  * testable without constructing a Terminal/WebSocket (xterm.js needs no
@@ -218,6 +241,7 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
     scrollback: 5000,
     allowProposedApi: true,
     fontSize: loadFontSize(),
+    fontFamily: TERMINAL_FONT_FAMILY,
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -448,31 +472,35 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
     },
     attach(target: HTMLElement) {
       el = target
-      term.open(el)
-      tryLoadWebgl()
-      fit.fit()
-      hardenTextareaAutocorrect()
-
-      // Mouse pass-through + no browser context menu, per the design doc's
-      // "Frontend requirements": Herdr is mouse-first (clickable panes/
-      // tabs/borders), so the browser's own right-click menu must never
-      // shadow it.
-      el.addEventListener('contextmenu', (e) => e.preventDefault())
-
-      // { passive: false } is required so preventDefault() in onTouchMove
-      // can actually suppress the browser's default touch handling once a
-      // drag is detected — see the touch-scroll shim's doc comment above.
-      el.addEventListener('touchstart', onTouchStart, { passive: false })
-      el.addEventListener('touchmove', onTouchMove, { passive: false })
-      el.addEventListener('touchend', onTouchEnd, { passive: false })
-      el.addEventListener('touchcancel', onTouchEnd, { passive: false })
-
-      resizeObserver = new ResizeObserver(() => {
+      // CSS Font Loading API forces our PUA fallback to finish before xterm
+      // measures cells or creates its WebGL glyph atlas.
+      void initializeAfterTerminalFont(document.fonts, () => closed || el !== target, () => {
+        term.open(target)
+        tryLoadWebgl()
         fit.fit()
-      })
-      resizeObserver.observe(el)
+        hardenTextareaAutocorrect()
 
-      open()
+        // Mouse pass-through + no browser context menu, per the design doc's
+        // "Frontend requirements": Herdr is mouse-first (clickable panes/
+        // tabs/borders), so the browser's own right-click menu must never
+        // shadow it.
+        target.addEventListener('contextmenu', (e) => e.preventDefault())
+
+        // { passive: false } is required so preventDefault() in onTouchMove
+        // can actually suppress the browser's default touch handling once a
+        // drag is detected — see the touch-scroll shim's doc comment above.
+        target.addEventListener('touchstart', onTouchStart, { passive: false })
+        target.addEventListener('touchmove', onTouchMove, { passive: false })
+        target.addEventListener('touchend', onTouchEnd, { passive: false })
+        target.addEventListener('touchcancel', onTouchEnd, { passive: false })
+
+        resizeObserver = new ResizeObserver(() => {
+          fit.fit()
+        })
+        resizeObserver.observe(target)
+
+        open()
+      })
     },
     close() {
       closed = true
