@@ -411,10 +411,13 @@ func TestNotifySanitizesURLBearingError(t *testing.T) {
 type countingConn struct {
 	net.Conn
 	closes atomic.Int32
+	closed chan struct{}
 }
 
 func (c *countingConn) Close() error {
-	c.closes.Add(1)
+	if c.closes.Add(1) == 1 {
+		close(c.closed)
+	}
 	return c.Conn.Close()
 }
 
@@ -602,25 +605,39 @@ func TestFocusAPIRejectsMissingPaneBeforeFocus(t *testing.T) {
 	}
 }
 
-func TestRunEventsOnceSubscribesForNewPanes(t *testing.T) {
+func TestRunEventsOnceUsesFreshSubscriptionConnection(t *testing.T) {
 	svc, _ := testService(t)
-	client, server := net.Pipe()
-	svc.dial = func(context.Context, string, string) (net.Conn, error) { return client, nil }
+	snapshotClient, snapshotServer := net.Pipe()
+	eventsClient, eventsServer := net.Pipe()
+	connections := make(chan net.Conn, 2)
+	connections <- snapshotClient
+	connections <- eventsClient
+	var dials atomic.Int32
+	svc.dial = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return <-connections, nil
+	}
 	subscription := make(chan string, 1)
 	go func() {
-		defer server.Close()
-		scan := bufio.NewScanner(server)
-		if !scan.Scan() {
-			return
+		defer snapshotServer.Close()
+		scan := bufio.NewScanner(snapshotServer)
+		if scan.Scan() {
+			_, _ = io.WriteString(snapshotServer, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","terminal_id":"t1","workspace_id":"w1","tab_id":"tab1","focused":false,"agent_status":"working","revision":1}],"layouts":[],"agents":[]}}}`+"\n")
 		}
-		_, _ = io.WriteString(server, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","terminal_id":"t1","workspace_id":"w1","tab_id":"tab1","focused":false,"agent_status":"working","revision":1}],"layouts":[],"agents":[]}}}`+"\n")
+	}()
+	go func() {
+		defer eventsServer.Close()
+		scan := bufio.NewScanner(eventsServer)
 		if scan.Scan() {
 			subscription <- scan.Text()
-			_, _ = io.WriteString(server, `{"event":"pane.created","data":{"pane":{"pane_id":"p2"}}}`+"\n")
+			_, _ = io.WriteString(eventsServer, `{"event":"pane.created","data":{"pane":{"pane_id":"p2"}}}`+"\n")
 		}
 	}()
 	if err := svc.runEventsOnce(context.Background(), "unused"); !errors.Is(err, errPaneSetChanged) {
 		t.Fatalf("pane creation did not request resnapshot: %v", err)
+	}
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("dial count=%d want 2", got)
 	}
 	select {
 	case request := <-subscription:
@@ -694,14 +711,22 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.sender = fakeSender{status: http.StatusInternalServerError}
+	eventSnapshotClient, eventSnapshotServer := net.Pipe()
 	eventClient, eventServer := net.Pipe()
-	svc.dial = func(context.Context, string, string) (net.Conn, error) { return eventClient, nil }
+	eventConnections := make(chan net.Conn, 2)
+	eventConnections <- eventSnapshotClient
+	eventConnections <- eventClient
+	svc.dial = func(context.Context, string, string) (net.Conn, error) { return <-eventConnections, nil }
+	go func() {
+		defer eventSnapshotServer.Close()
+		scan := bufio.NewScanner(eventSnapshotServer)
+		if scan.Scan() {
+			_, _ = io.WriteString(eventSnapshotServer, `{"result":{"snapshot":{"panes":[{"pane_id":"secret-pane","agent_status":"working"}]}}}`+"\n")
+		}
+	}()
 	go func() {
 		defer eventServer.Close()
 		scan := bufio.NewScanner(eventServer)
-		if scan.Scan() {
-			_, _ = io.WriteString(eventServer, `{"result":{"snapshot":{"panes":[{"pane_id":"secret-pane","agent_status":"working"}]}}}`+"\n")
-		}
 		if scan.Scan() {
 			_, _ = io.WriteString(eventServer, `{"event":"pane.agent_status_changed","data":{"pane_id":"secret-pane","agent_status":"done","agent":"secret-agent"}}`+"\n")
 		}
@@ -852,28 +877,126 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 	}
 }
 
-func TestRunEventsOnceStopsCancellationHookOnStreamEnd(t *testing.T) {
-	svc, _ := testService(t)
+func TestRunEventsOnceCancellationClosesOwnedConnections(t *testing.T) {
+	for _, phase := range []string{"snapshot scan", "subscription scan"} {
+		t.Run(phase, func(t *testing.T) {
+			svc, _ := testService(t)
+			snapshotClient, snapshotServer := net.Pipe()
+			eventsClient, eventsServer := net.Pipe()
+			t.Cleanup(func() {
+				_ = snapshotServer.Close()
+				_ = eventsServer.Close()
+			})
+			snapshotConn := &countingConn{Conn: snapshotClient, closed: make(chan struct{})}
+			eventsConn := &countingConn{Conn: eventsClient, closed: make(chan struct{})}
+			connections := make(chan net.Conn, 2)
+			connections <- snapshotConn
+			connections <- eventsConn
+			svc.dial = func(context.Context, string, string) (net.Conn, error) { return <-connections, nil }
+			blocked := make(chan struct{})
+			go func() {
+				scan := bufio.NewScanner(snapshotServer)
+				if !scan.Scan() {
+					return
+				}
+				if phase == "snapshot scan" {
+					close(blocked)
+					return
+				}
+				_, _ = io.WriteString(snapshotServer, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`+"\n")
+			}()
+			if phase == "subscription scan" {
+				go func() {
+					scan := bufio.NewScanner(eventsServer)
+					if scan.Scan() {
+						close(blocked)
+					}
+				}()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			result := make(chan error, 1)
+			go func() { result <- svc.runEventsOnce(ctx, "unused") }()
+			select {
+			case <-blocked:
+			case <-time.After(time.Second):
+				t.Fatalf("runEventsOnce did not block in %s", phase)
+			}
+			cancel()
+			select {
+			case err := <-result:
+				if err == nil {
+					t.Fatal("cancellation returned nil error")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("runEventsOnce did not exit promptly after cancellation")
+			}
+			owned := map[string]*countingConn{"snapshot": snapshotConn}
+			if phase == "subscription scan" {
+				owned["subscription"] = eventsConn
+			}
+			for name, conn := range owned {
+				select {
+				case <-conn.closed:
+				case <-time.After(time.Second):
+					t.Fatalf("%s connection did not close", name)
+				}
+				if got := conn.closes.Load(); got != 1 {
+					t.Fatalf("%s close count=%d want 1", name, got)
+				}
+			}
+		})
+	}
+}
+
+func TestEventConnCloseStopsCancellationHook(t *testing.T) {
 	client, server := net.Pipe()
-	conn := &countingConn{Conn: client}
-	svc.dial = func(context.Context, string, string) (net.Conn, error) { return conn, nil }
-	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { _ = server.Close() })
+	conn := &countingConn{Conn: client, closed: make(chan struct{})}
+	stopped := false
+	owned := &eventConn{Conn: conn, stopClose: func() bool {
+		stopped = true
+		return true
+	}}
+
+	if err := owned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !stopped {
+		t.Fatal("Close did not stop cancellation hook")
+	}
+	if got := conn.closes.Load(); got != 1 {
+		t.Fatalf("close count=%d want 1", got)
+	}
+}
+
+func TestRunEventsOnceClosesConnectionsOnStreamEnd(t *testing.T) {
+	svc, _ := testService(t)
+	snapshotClient, snapshotServer := net.Pipe()
+	eventsClient, eventsServer := net.Pipe()
+	snapshotConn := &countingConn{Conn: snapshotClient, closed: make(chan struct{})}
+	eventsConn := &countingConn{Conn: eventsClient, closed: make(chan struct{})}
+	connections := make(chan net.Conn, 2)
+	connections <- snapshotConn
+	connections <- eventsConn
+	svc.dial = func(context.Context, string, string) (net.Conn, error) { return <-connections, nil }
 	go func() {
-		defer server.Close()
-		scanner := make([]byte, 1024)
-		_, _ = server.Read(scanner)
-		_, _ = io.WriteString(server, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`+"\n")
-		_, _ = server.Read(scanner)
+		defer snapshotServer.Close()
+		scan := bufio.NewScanner(snapshotServer)
+		if scan.Scan() {
+			_, _ = io.WriteString(snapshotServer, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`+"\n")
+		}
 	}()
-	if err := svc.runEventsOnce(ctx, "unused"); err == nil {
+	go func() {
+		defer eventsServer.Close()
+		scan := bufio.NewScanner(eventsServer)
+		_ = scan.Scan()
+	}()
+	if err := svc.runEventsOnce(context.Background(), "unused"); err == nil {
 		t.Fatal("expected closed stream error")
 	}
-	if got := conn.closes.Load(); got != 1 {
-		t.Fatalf("close count before cancel=%d", got)
-	}
-	cancel()
-	time.Sleep(20 * time.Millisecond)
-	if got := conn.closes.Load(); got != 1 {
-		t.Fatalf("ended attempt cancellation hook leaked; closes=%d", got)
+	for name, conn := range map[string]*countingConn{"snapshot": snapshotConn, "subscription": eventsConn} {
+		if got := conn.closes.Load(); got != 1 {
+			t.Fatalf("%s close count=%d want 1", name, got)
+		}
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -25,6 +27,32 @@ type agentEvent struct {
 }
 
 var errPaneSetChanged = errors.New("Herdr pane set changed")
+
+type eventConn struct {
+	net.Conn
+	closeOnce sync.Once
+	stopClose func() bool
+}
+
+// newEventConn owns conn and registers context cancellation to close it.
+func newEventConn(ctx context.Context, conn net.Conn) *eventConn {
+	owned := &eventConn{Conn: conn}
+	owned.stopClose = context.AfterFunc(ctx, func() { _ = owned.close() })
+	return owned
+}
+
+// Close stops cancellation ownership before closing the connection explicitly.
+func (c *eventConn) Close() error {
+	c.stopClose()
+	return c.close()
+}
+
+// close uses sync.Once so cancellation and explicit cleanup cannot double-close the connection.
+func (c *eventConn) close() error {
+	var err error
+	c.closeOnce.Do(func() { err = c.Conn.Close() })
+	return err
+}
 
 type snapshotResponse struct {
 	Result struct {
@@ -84,28 +112,43 @@ func (s *Service) RunEvents(ctx context.Context, socketPath string) error {
 	}
 }
 
-// runEventsOnce owns one socket attempt; its cancellation hook is stopped when that attempt ends.
+// runEventsOnce owns one snapshot connection and one event-stream connection.
 func (s *Service) runEventsOnce(ctx context.Context, path string) error {
-	c, err := s.dial(ctx, "unix", path)
+	rawSnapshot, err := s.dial(ctx, "unix", path)
 	if err != nil {
-		return errors.Wrap(err, "connect Herdr socket")
+		return errors.Wrap(err, "connect Herdr snapshot socket")
 	}
-	defer c.Close()
-	stopClose := context.AfterFunc(ctx, func() { _ = c.Close() })
-	defer stopClose()
-	// Schema v16: newline-delimited request; pane_id is required, so snapshot seeds one subscription per current pane.
-	if _, err = io.WriteString(c, "{\"id\":\"push-snapshot\",\"method\":\"session.snapshot\",\"params\":{}}\n"); err != nil {
-		return err
+	snapshot := newEventConn(ctx, rawSnapshot)
+	// Schema v16 accepts one initial request per connection. Snapshot seeds pane-specific subscriptions.
+	if _, err = io.WriteString(snapshot, "{\"id\":\"push-snapshot\",\"method\":\"session.snapshot\",\"params\":{}}\n"); err != nil {
+		_ = snapshot.Close()
+		return errors.Wrap(err, "write Herdr snapshot request")
 	}
-	scan := bufio.NewScanner(c)
+	scan := bufio.NewScanner(snapshot)
 	scan.Buffer(make([]byte, 4096), 1<<20)
 	if !scan.Scan() {
+		scanErr := scan.Err()
+		_ = snapshot.Close()
+		if scanErr != nil {
+			return errors.Wrap(scanErr, "read Herdr snapshot response")
+		}
 		return errors.New("Herdr snapshot response missing")
 	}
 	var snap snapshotResponse
 	if err = json.Unmarshal(scan.Bytes(), &snap); err != nil {
+		_ = snapshot.Close()
 		return errors.Wrap(err, "decode Herdr snapshot")
 	}
+	if err = snapshot.Close(); err != nil {
+		return errors.Wrap(err, "close Herdr snapshot socket")
+	}
+
+	rawEvents, err := s.dial(ctx, "unix", path)
+	if err != nil {
+		return errors.Wrap(err, "connect Herdr subscription socket")
+	}
+	events := newEventConn(ctx, rawEvents)
+	defer events.Close()
 	states := map[string]string{}
 	subs := make([]map[string]string, 0, len(snap.Result.Snapshot.Panes)+1)
 	for _, p := range snap.Result.Snapshot.Panes {
@@ -115,9 +158,11 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 	// Pane status subscriptions require pane_id. Reconnect from a fresh snapshot when pane set grows.
 	subs = append(subs, map[string]string{"type": "pane.created"})
 	req := map[string]any{"id": "push-events", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs}}
-	if err = json.NewEncoder(c).Encode(req); err != nil {
-		return errors.Wrap(err, "subscribe Herdr events")
+	if err = json.NewEncoder(events).Encode(req); err != nil {
+		return errors.Wrap(err, "write Herdr subscription request")
 	}
+	scan = bufio.NewScanner(events)
+	scan.Buffer(make([]byte, 4096), 1<<20)
 	for scan.Scan() {
 		var e agentEvent
 		if json.Unmarshal(scan.Bytes(), &e) != nil {
@@ -146,7 +191,7 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 		span.End()
 	}
 	if err := scan.Err(); err != nil {
-		return errors.Wrap(err, "read Herdr events")
+		return errors.Wrap(err, "read Herdr subscription events")
 	}
-	return errors.New("Herdr event stream closed")
+	return errors.New("Herdr subscription event stream closed")
 }
