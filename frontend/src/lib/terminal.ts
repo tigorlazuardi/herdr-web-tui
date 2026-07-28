@@ -239,6 +239,9 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
   const term = new Terminal({
     cursorBlink: true,
     scrollback: 5000,
+    // ponytail: 1px keeps scrollback while avoiding xterm FitAddon's fixed
+    // 14px mobile gutter; widen only if desktop scrollbar dragging matters.
+    overviewRuler: { width: 1 },
     allowProposedApi: true,
     fontSize: loadFontSize(),
     fontFamily: TERMINAL_FONT_FAMILY,

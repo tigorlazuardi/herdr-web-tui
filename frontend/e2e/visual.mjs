@@ -21,6 +21,16 @@ async function main() {
   // reaches a paintable state without a TTY) — expected, we're only
   // checking UI chrome (topbar, promptbox, key bar), not terminal output.
   await page.waitForTimeout(2500)
+
+  const terminalGutter = await page.evaluate(() => {
+    const host = document.querySelector('.terminal').getBoundingClientRect()
+    const screen = document.querySelector('.xterm-screen').getBoundingClientRect()
+    return host.right - screen.right
+  })
+  if (terminalGutter > 12) {
+    throw new Error(`terminal right gutter is ${terminalGutter}px; expected <= 12px`)
+  }
+
   await page.screenshot({ path: join(OUT, '01-baseline.png') })
 
   // A deliberately long, realistic screenshot filename — the promptbox
