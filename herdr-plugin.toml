@@ -1,0 +1,21 @@
+id = "tigorlazuardi.herdr-web-tui"
+name = "Herdr Web TUI Daemon Launcher"
+version = "0.5.0"
+min_herdr_version = "0.7.4"
+description = "Build and run the external Herdr Web TUI daemon in a managed pane"
+platforms = ["linux"]
+
+[[build]]
+command = ["npm", "--prefix", "frontend", "ci"]
+
+[[build]]
+command = ["npm", "--prefix", "frontend", "run", "build"]
+
+[[build]]
+command = ["go", "build", "-o", "herdr-web-tui", "./cmd/herdr-web-tui"]
+
+[[panes]]
+id = "daemon"
+title = "Herdr Web TUI daemon"
+placement = "tab"
+command = ["sh", "-c", "exec ./herdr-web-tui -addr \"${ADDR:-127.0.0.1:8080}\""]
