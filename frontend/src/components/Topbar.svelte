@@ -1,29 +1,9 @@
 <script lang="ts">
-  /**
-   * Fixed top bar (mobile-ux-v2.md, "Topbar"). Replaces two floating
-   * bottom-right control clusters that used to collide: App.svelte's font
-   * +/- lever and KeyBar's own show/hide toggle (issue #3). This
-   * component owns neither the connection status text nor the accessory
-   * key bar's own content — it only renders the three controls that used
-   * to float, plus a spacer slot for the connecting/reconnecting badge so
-   * that badge doesn't end up sharing the same corner as the toggle
-   * button (it used to be fixed top-right while the toggle was fixed
-   * bottom-right; now both live in the same bar).
-   *
-   * The toggle button now CYCLES through three input modes (promptbox ->
-   * keys -> termux -> promptbox) rather than switching between two —
-   * `inputMode` is `$bindable` so this component can both display and
-   * advance it, but the state itself lives in App.svelte (the single
-   * owner; Promptbox/KeyBar read it as a plain controlled prop) — see
-   * App.svelte's doc comment. The button shows an icon + a short text
-   * label naming the CURRENT mode (not the mode a tap switches to, unlike
-   * the old two-mode label) since a bare glyph doesn't scale to
-   * disambiguating three states at a glance.
-   */
+  /** Top controls. App owns one input switch: Text composer vs accessory rail. */
   import type { ConnectionState, TerminalBridge } from '../lib/terminal'
   import PushControl from './PushControl.svelte'
 
-  type InputMode = 'promptbox' | 'keys' | 'termux'
+  type InputMode = 'promptbox' | 'accessory'
 
   let {
     bridge,
@@ -38,21 +18,18 @@
   } = $props()
 
   const NEXT_MODE: Record<InputMode, InputMode> = {
-    promptbox: 'keys',
-    keys: 'termux',
-    termux: 'promptbox',
+    promptbox: 'accessory',
+    accessory: 'promptbox',
   }
 
   const MODE_ICON: Record<InputMode, string> = {
     promptbox: '✎',
-    keys: '⌨',
-    termux: '▣',
+    accessory: '⌨',
   }
 
   const MODE_LABEL: Record<InputMode, string> = {
     promptbox: 'Text',
-    keys: 'Keys',
-    termux: 'Termux',
+    accessory: 'Rail',
   }
 </script>
 
@@ -81,10 +58,7 @@
     {/if}
   </div>
 
-  <!-- Single button, three-way cycle: icon + label name the CURRENT mode
-       (a bare glyph can't disambiguate three states as fast as two), and
-       aria-label describes the tap action rather than the state so a
-       screen reader hears what pressing it does. -->
+  <!-- Single button names current mode; tap swaps Text composer and accessory rail. -->
   <button
     class="toggle"
     type="button"

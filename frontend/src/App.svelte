@@ -23,87 +23,24 @@
   const sticky = createStickyModifiers()
   const bridge = createTerminalBridge(sticky)
 
-  // App owns the input mode (mobile-ux-v2.md "Topbar", extended to three
-  // modes): 'promptbox' (the artifact composer), 'keys' (accessory bar,
-  // soft keyboard suppressed — tapping the TUI must not summon it), and
-  // 'termux' (accessory bar ABOVE an always-open soft keyboard, for
-  // sustained typing into e.g. neovim). Only the Topbar toggle cycles this
-  // — no auto-switch on tap/keystroke, or the mode would flip out from
-  // under the user mid-session. Promptbox stays MOUNTED in all three modes
-  // (see its `hidden` prop) so switching away and back never drops
-  // in-progress text or uploaded attachments; KeyBar only mounts outside
-  // promptbox mode, matching the old exclusive-render behaviour it never
-  // needed to keep state across.
-  let inputMode = $state<'promptbox' | 'keys' | 'termux'>('promptbox')
+  // App owns one explicit switch: prompt composer vs accessory rail. The
+  // old keys/termux split made users choose between "keys" and "keyboard";
+  // the unified rail follows Termux instead: chips stay above the soft
+  // keyboard, and sticky modifiers still make one-shot chords possible.
+  let inputMode = $state<'promptbox' | 'accessory'>('promptbox')
 
-  // Local mirror of the sticky-modifier latch, purely so the $effect below
-  // can react to it (an $effect can only track $state reads, not an
-  // external class's plain-property reads) — see keybar.ts's
-  // StickyModifiers doc for why App/KeyBar/terminal.ts all share one
-  // instance instead of each keeping a latch of their own.
-  let mods = $state(sticky.state)
-
-  // Keyboard/focus policy per mode (design doc: one-shot vs sustained
-  // keyboard). Keyed on inputMode AND mods so a modifier latching/
-  // clearing mid-keys-mode also re-runs this without a separate handler:
-  //
-  // - promptbox: keyboard behaves exactly as it does today — restoreKeyboard()
-  //   so tapping the terminal (or the promptbox) opens it normally.
-  //
-  // - termux: keyboard STAYS OPEN the whole time. This mode exists for
-  //   sustained typing (neovim etc.), so every plain keystroke must reach
-  //   the TUI without an extra tap to reopen the keyboard first.
-  //   restoreKeyboard() + focus() unconditionally, regardless of mods —
-  //   the accessory bar renders above the keyboard here, both on screen at
-  //   once, which is the whole point of this mode.
-  //
-  // - keys: the keyboard is a ONE-SHOT popup for a modifier's follow-up
-  //   character, not a permanent fixture — tapping the TUI in this mode
-  //   must never summon it (that's the mode's entire reason to exist).
-  //   While no modifier is latched: suppressKeyboard() + blur() (both the
-  //   bridge's hidden textarea and whatever else has focus — covers the
-  //   terminal and the promptbox, the two places focus/keyboard can be
-  //   sitting). The instant a modifier latches (ctrl/alt/fn tap on
-  //   KeyBar): restoreKeyboard() + focus() so the soft keyboard pops up
-  //   for the follow-up keystroke; that keystroke runs through
-  //   term.onData -> sticky.consume() (terminal.ts) which sends the
-  //   modified byte AND clears the latch, and this effect re-runs on the
-  //   next mods change to suppress the keyboard again. Net effect: tap
-  //   Ctrl -> keyboard pops up -> type c -> sends \x03 -> keyboard closes.
-  //
-  // suppressKeyboard()/restoreKeyboard() (terminal.ts) hold the invariant
-  // across taps by toggling inputmode="none" on xterm's textarea: a
-  // one-shot blur() alone isn't enough because the terminal is mouse-first
-  // (every pane clickable) and the very next tap on a pane would
-  // re-focus/re-summon the keyboard otherwise.
   $effect(() => {
-    if (inputMode === 'promptbox') {
-      bridge.restoreKeyboard()
-    } else if (inputMode === 'termux') {
-      bridge.restoreKeyboard()
-      bridge.focus()
-    } else {
-      const anyLatch = mods.ctrl || mods.alt || mods.fn
-      if (anyLatch) {
-        bridge.restoreKeyboard()
-        bridge.focus()
-      } else {
-        bridge.suppressKeyboard()
-        bridge.blur()
-        ;(document.activeElement as HTMLElement | null)?.blur()
-      }
-    }
+    bridge.restoreKeyboard()
+    if (inputMode === 'accessory') bridge.focus()
   })
 
   onMount(() => {
-    const unsubStickyMods = sticky.subscribe((s) => (mods = s))
     const unsubscribe = bridge.onStateChange((s) => (connectionState = s))
     const releaseWakeLock = holdPWAScreenAwake((unavailable) => (wakeLockUnavailable = unavailable))
     bridge.attach(container)
     return () => {
       releaseWakeLock()
       unsubscribe()
-      unsubStickyMods()
     }
   })
 
@@ -113,8 +50,6 @@
   // pane-switch click must still reach xterm underneath this handler. The
   // existing touch->wheel shim (terminal.ts) turns a real drag into a
   // scroll rather than a click, so this only ever fires on a genuine tap.
-  // Clearing here also closes the soft keyboard again immediately, via the
-  // keys-mode branch of the $effect above re-running on the mods change.
   function onTerminalClick() {
     if (sticky.state.ctrl || sticky.state.alt || sticky.state.fn) {
       sticky.clear()
@@ -128,7 +63,7 @@
 
 <main>
   <!-- Layout A (mobile-ux-v2.md): topbar → terminal (flex:1) → promptbox →
-       accessory keys (keys/termux only) → soft keyboard, top to bottom,
+       accessory rail → soft keyboard, top to bottom,
        all in normal flex-column flow. Promptbox always renders (see its
        `hidden` prop's doc comment — mounted-but-hidden, not
        conditionally-mounted, so switching modes never destroys its text/
@@ -147,7 +82,7 @@
        interactive role. -->
   <div class="terminal" bind:this={container} onclick={onTerminalClick}></div>
   <Promptbox hidden={inputMode !== 'promptbox'} />
-  {#if inputMode !== 'promptbox'}
+  {#if inputMode === 'accessory'}
     <KeyBar {bridge} {sticky} />
   {/if}
 </main>

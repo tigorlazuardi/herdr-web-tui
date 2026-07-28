@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { applyModifiers, createStickyModifiers } from './keybar'
+import {
+  ACCESSORY_CHIPS,
+  applyModifiers,
+  createStickyModifiers,
+  mergeAccessoryOrder,
+  moveAccessoryChip,
+} from './keybar'
 
 // Table-driven: [description, key, mods, expected bytes]. Expected bytes
 // are cross-checked against xterm.js's own evaluateKeyboardEvent output
@@ -42,6 +48,23 @@ describe('applyModifiers', () => {
       )
     })
   }
+})
+
+describe('accessory rail order', () => {
+  it('keeps valid stored ids, drops junk and appends new defaults', () => {
+    const order = mergeAccessoryOrder(['right', 'missing', 'right', 'ctrl'])
+    expect(order.slice(0, 2)).toEqual(['right', 'ctrl'])
+    expect(order).toHaveLength(ACCESSORY_CHIPS.length)
+    expect(new Set(order).size).toBe(ACCESSORY_CHIPS.length)
+  })
+
+  it('moves dragged chip before drop target without losing ids', () => {
+    expect(moveAccessoryChip(['esc', 'ctrl', 'tab'], 'tab', 'ctrl')).toEqual([
+      'esc',
+      'tab',
+      'ctrl',
+    ])
+  })
 })
 
 describe('createStickyModifiers', () => {
