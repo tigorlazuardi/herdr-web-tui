@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"net"
 	"os"
 	"sync"
@@ -28,9 +27,15 @@ type agentEventData struct {
 	Pane         *agentEventPane `json:"pane"`
 }
 
+type subscriptionResult struct {
+	Type string `json:"type"`
+}
+
 type agentEvent struct {
-	Event string         `json:"event"`
-	Data  agentEventData `json:"data"`
+	ID     string              `json:"id"`
+	Result *subscriptionResult `json:"result"`
+	Event  string              `json:"event"`
+	Data   agentEventData      `json:"data"`
 }
 
 var errPaneSetChanged = errors.New("Herdr pane set changed")
@@ -61,19 +66,6 @@ func (c *eventConn) close() error {
 	return err
 }
 
-type snapshotResponse struct {
-	Result struct {
-		Snapshot struct {
-			Panes []struct {
-				PaneID       string  `json:"pane_id"`
-				AgentStatus  string  `json:"agent_status"`
-				Agent        *string `json:"agent"`
-				DisplayAgent *string `json:"display_agent"`
-			} `json:"panes"`
-		} `json:"snapshot"`
-	} `json:"result"`
-}
-
 // paneCreationChangesSet ignores Herdr's initial replay of snapshot panes and detects genuinely new panes.
 func paneCreationChangesSet(states map[string]string, e agentEvent) bool {
 	if e.Event != "pane.created" && e.Event != "pane_created" {
@@ -86,11 +78,32 @@ func paneCreationChangesSet(states map[string]string, e agentEvent) bool {
 	return !exists
 }
 
+// paneExists verifies an absent pane_created replay against current Herdr state.
+func (s *Service) paneExists(ctx context.Context, path, paneID string) (bool, error) {
+	var current focusSnapshotResult
+	request := herdrRequest{ID: "push-pane-check", Method: "session.snapshot", Params: map[string]any{}}
+	if err := s.herdrRoundTrip(ctx, path, "pane replay check", request, &current); err != nil {
+		return false, err
+	}
+	if !validSessionSnapshot(current) {
+		return false, errors.Wrap(errHerdrProtocol, "invalid pane replay snapshot")
+	}
+	for _, pane := range current.Snapshot.Panes {
+		if pane.PaneID == paneID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // EventTransition returns a notification only for real transitions into done or blocked.
 func EventTransition(states map[string]string, e agentEvent) (string, string, string, bool) {
 	old, seen := states[e.Data.PaneID]
+	if !seen || !validPaneID(e.Data.PaneID) {
+		return "", "", "", false
+	}
 	states[e.Data.PaneID] = e.Data.AgentStatus
-	if !seen || old == e.Data.AgentStatus || !validPaneID(e.Data.PaneID) || (e.Data.AgentStatus != "done" && e.Data.AgentStatus != "blocked") {
+	if old == e.Data.AgentStatus || (e.Data.AgentStatus != "done" && e.Data.AgentStatus != "blocked") {
 		return "", "", "", false
 	}
 	name := "Agent"
@@ -131,35 +144,15 @@ func (s *Service) RunEvents(ctx context.Context, socketPath string) error {
 	}
 }
 
-// runEventsOnce owns one snapshot connection and one event-stream connection.
+// runEventsOnce owns one validated snapshot round trip and one event-stream connection.
 func (s *Service) runEventsOnce(ctx context.Context, path string) error {
-	rawSnapshot, err := s.dial(ctx, "unix", path)
-	if err != nil {
-		return errors.Wrap(err, "connect Herdr snapshot socket")
+	var snap focusSnapshotResult
+	snapshotRequest := herdrRequest{ID: "push-snapshot", Method: "session.snapshot", Params: map[string]any{}}
+	if err := s.herdrRoundTrip(ctx, path, "event snapshot", snapshotRequest, &snap); err != nil {
+		return err
 	}
-	snapshot := newEventConn(ctx, rawSnapshot)
-	// Schema v16 accepts one initial request per connection. Snapshot seeds pane-specific subscriptions.
-	if _, err = io.WriteString(snapshot, "{\"id\":\"push-snapshot\",\"method\":\"session.snapshot\",\"params\":{}}\n"); err != nil {
-		_ = snapshot.Close()
-		return errors.Wrap(err, "write Herdr snapshot request")
-	}
-	scan := bufio.NewScanner(snapshot)
-	scan.Buffer(make([]byte, 4096), 1<<20)
-	if !scan.Scan() {
-		scanErr := scan.Err()
-		_ = snapshot.Close()
-		if scanErr != nil {
-			return errors.Wrap(scanErr, "read Herdr snapshot response")
-		}
-		return errors.New("Herdr snapshot response missing")
-	}
-	var snap snapshotResponse
-	if err = json.Unmarshal(scan.Bytes(), &snap); err != nil {
-		_ = snapshot.Close()
-		return errors.Wrap(err, "decode Herdr snapshot")
-	}
-	if err = snapshot.Close(); err != nil {
-		return errors.Wrap(err, "close Herdr snapshot socket")
+	if !validSessionSnapshot(snap) {
+		return errors.Wrap(errHerdrProtocol, "event snapshot missing required shape")
 	}
 
 	rawEvents, err := s.dial(ctx, "unix", path)
@@ -169,8 +162,8 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 	events := newEventConn(ctx, rawEvents)
 	defer events.Close()
 	states := map[string]string{}
-	subs := make([]map[string]string, 0, len(snap.Result.Snapshot.Panes)+1)
-	for _, p := range snap.Result.Snapshot.Panes {
+	subs := make([]map[string]string, 0, len(snap.Snapshot.Panes)+1)
+	for _, p := range snap.Snapshot.Panes {
 		states[p.PaneID] = p.AgentStatus
 		subs = append(subs, map[string]string{"type": "pane.agent_status_changed", "pane_id": p.PaneID})
 	}
@@ -180,29 +173,80 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 	if err = json.NewEncoder(events).Encode(req); err != nil {
 		return errors.Wrap(err, "write Herdr subscription request")
 	}
-	scan = bufio.NewScanner(events)
+	scan := bufio.NewScanner(events)
 	scan.Buffer(make([]byte, 4096), 1<<20)
+	started := false
 	for scan.Scan() {
 		var e agentEvent
-		if json.Unmarshal(scan.Bytes(), &e) != nil {
+		if err := json.Unmarshal(scan.Bytes(), &e); err != nil {
+			s.log.WarnContext(ctx, "Herdr event frame ignored", "reason", "malformed")
 			continue
+		}
+		if e.ID != "" || e.Result != nil {
+			if e.ID != "push-events" || e.Result == nil || e.Result.Type != "subscription_started" {
+				return errors.Wrap(errHerdrProtocol, "unexpected Herdr subscription response")
+			}
+			started = true
+			s.log.InfoContext(ctx, "Herdr event subscription started", "pane.count", len(states))
+			continue
+		}
+		if !started {
+			return errors.Wrap(errHerdrProtocol, "Herdr event received before subscription started")
 		}
 		// Herdr 0.7.4 replays existing pane_created records when a subscription starts.
 		// Reconnect only for a pane absent from the snapshot that seeded states.
 		if e.Event == "pane.created" || e.Event == "pane_created" {
-			if paneCreationChangesSet(states, e) {
-				return errPaneSetChanged
+			if !paneCreationChangesSet(states, e) {
+				s.log.InfoContext(ctx, "Herdr pane creation replay ignored", "reason", "snapshot_pane", "pane.id", "<redacted>")
+				continue
 			}
-			continue
+			exists, err := s.paneExists(ctx, path, e.Data.Pane.PaneID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				s.log.InfoContext(ctx, "Herdr pane creation replay ignored", "reason", "stale_pane", "pane.id", "<redacted>")
+				continue
+			}
+			s.log.InfoContext(ctx, "Herdr pane set changed", "reason", "new_pane", "pane.id", "<redacted>")
+			return errPaneSetChanged
 		}
 		if e.Event != "pane.agent_status_changed" {
 			continue
 		}
 		opctx, span := otel.Tracer("herdr-web-tui/push").Start(ctx, "agent event handling")
+		previous, seen := states[e.Data.PaneID]
+		eventType := e.Data.AgentStatus
+		if eventType != "idle" && eventType != "working" && eventType != "blocked" && eventType != "done" && eventType != "unknown" {
+			eventType = "unknown"
+		}
+		if !seen {
+			if validPaneID(e.Data.PaneID) {
+				exists, err := s.paneExists(opctx, path, e.Data.PaneID)
+				if err != nil {
+					span.End()
+					return err
+				}
+				if exists {
+					s.log.InfoContext(opctx, "Herdr pane set changed", "reason", "unseeded_event", "pane.id", "<redacted>")
+					span.End()
+					return errPaneSetChanged
+				}
+			}
+			s.log.InfoContext(opctx, "Herdr agent event handled", "event.type", eventType, "outcome", "ignored", "reason", "unseeded", "agent.name", "<redacted>", "pane.id", "<redacted>")
+			span.SetAttributes(attribute.String("event.type", ""), attribute.String("outcome", "ignored"), attribute.String("status_class", "none"), attribute.String("error.kind", "none"), attribute.String("agent.name", "<redacted>"), attribute.String("pane.id", "<redacted>"))
+			span.End()
+			continue
+		}
 		name, state, paneID, ok := EventTransition(states, e)
-		outcome, errorKind := "ignored", "none"
-		if ok {
-			outcome = "success"
+		outcome, errorKind, reason := "ignored", "none", "nonterminal"
+		switch {
+		case !validPaneID(e.Data.PaneID):
+			reason = "invalid_pane"
+		case previous == e.Data.AgentStatus:
+			reason = "duplicate"
+		case ok:
+			outcome, reason = "success", "dispatch"
 			if err := s.Notify(opctx, name, state, paneID); err != nil {
 				outcome, errorKind = "failure", "dispatch"
 				span.RecordError(errors.New("agent event push dispatch failed"))
@@ -210,6 +254,7 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 				s.log.ErrorContext(opctx, "push dispatch failed", "error", err, "agent.name", "<redacted>", "push.endpoint", "<redacted>")
 			}
 		}
+		s.log.InfoContext(opctx, "Herdr agent event handled", "event.type", eventType, "outcome", outcome, "reason", reason, "agent.name", "<redacted>", "pane.id", "<redacted>")
 		span.SetAttributes(attribute.String("event.type", state), attribute.String("outcome", outcome), attribute.String("status_class", "none"), attribute.String("error.kind", errorKind), attribute.String("agent.name", "<redacted>"), attribute.String("pane.id", "<redacted>"))
 		span.End()
 	}

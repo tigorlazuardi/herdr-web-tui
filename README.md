@@ -28,7 +28,7 @@ Best for trying project locally. Requirements: Linux, Herdr 0.7.4+, Git, Go,
 Node.js, and npm. Herdr shows manifest/build commands before running them.
 
 ```bash
-herdr plugin install tigorlazuardi/herdr-web-tui --ref v0.5.1
+herdr plugin install tigorlazuardi/herdr-web-tui --ref v0.5.2
 herdr plugin pane open \
   --plugin tigorlazuardi.herdr-web-tui \
   --entrypoint daemon \
@@ -44,7 +44,7 @@ startup hooks are one-shot initialization, not daemon supervisors.
 Update or remove managed checkout:
 
 ```bash
-herdr plugin install tigorlazuardi/herdr-web-tui --ref v0.5.1
+herdr plugin install tigorlazuardi/herdr-web-tui --ref v0.5.2
 herdr plugin uninstall tigorlazuardi.herdr-web-tui
 ```
 
@@ -65,7 +65,7 @@ Or use Nix:
 
 ```bash
 HERDR_SOCKET_PATH="$HOME/.config/herdr/herdr.sock" \
-  nix run github:tigorlazuardi/herdr-web-tui/v0.5.1
+  nix run github:tigorlazuardi/herdr-web-tui/v0.5.2
 ```
 
 Named Herdr sessions use their own socket under

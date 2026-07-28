@@ -627,11 +627,16 @@ type focusSnapshotResult struct {
 		Workspaces []json.RawMessage `json:"workspaces"`
 		Tabs       []json.RawMessage `json:"tabs"`
 		Panes      []struct {
-			PaneID string `json:"pane_id"`
+			PaneID      string `json:"pane_id"`
+			AgentStatus string `json:"agent_status"`
 		} `json:"panes"`
 		Layouts []json.RawMessage `json:"layouts"`
 		Agents  []json.RawMessage `json:"agents"`
 	} `json:"snapshot"`
+}
+
+func validSessionSnapshot(s focusSnapshotResult) bool {
+	return s.Type == "session_snapshot" && s.Snapshot != nil && s.Snapshot.Version != nil && s.Snapshot.Protocol != nil && *s.Snapshot.Protocol == 16 && s.Snapshot.Workspaces != nil && s.Snapshot.Tabs != nil && s.Snapshot.Panes != nil && s.Snapshot.Layouts != nil && s.Snapshot.Agents != nil
 }
 
 type focusPaneResult struct {
@@ -711,10 +716,7 @@ func (s *Service) focusPane(ctx context.Context, paneID string) error {
 	if err := s.herdrRoundTrip(ctx, path, "snapshot", herdrRequest{ID: "focus-snapshot", Method: "session.snapshot", Params: map[string]any{}}, &snap); err != nil {
 		return err
 	}
-	if snap.Type != "session_snapshot" {
-		return errors.Wrap(errHerdrProtocol, "unexpected snapshot result type")
-	}
-	if snap.Snapshot == nil || snap.Snapshot.Version == nil || snap.Snapshot.Protocol == nil || *snap.Snapshot.Protocol != 16 || snap.Snapshot.Workspaces == nil || snap.Snapshot.Tabs == nil || snap.Snapshot.Panes == nil || snap.Snapshot.Layouts == nil || snap.Snapshot.Agents == nil {
+	if !validSessionSnapshot(snap) {
 		return errors.Wrap(errHerdrProtocol, "snapshot result missing required shape")
 	}
 	for _, pane := range snap.Snapshot.Panes {

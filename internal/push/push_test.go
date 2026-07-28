@@ -334,7 +334,7 @@ func TestPublicDialRevalidatesDNSAnswers(t *testing.T) {
 }
 
 func TestTransitionFiltersSnapshotsAndDuplicates(t *testing.T) {
-	states := map[string]string{}
+	states := map[string]string{"p": "done"}
 	e := agentEvent{}
 	e.Data.PaneID = "p"
 	e.Data.AgentStatus = "done"
@@ -356,6 +356,18 @@ func TestTransitionFiltersSnapshotsAndDuplicates(t *testing.T) {
 	e.Data.AgentStatus = "done"
 	if _, _, _, ok := EventTransition(states, e); ok {
 		t.Fatal("invalid pane target notified")
+	}
+}
+
+func TestTransitionDoesNotSeedUnvalidatedPane(t *testing.T) {
+	states := map[string]string{}
+	e := agentEvent{Data: agentEventData{PaneID: "p", AgentStatus: "working"}}
+	if _, _, _, ok := EventTransition(states, e); ok || len(states) != 0 {
+		t.Fatalf("unseeded working event trusted: states=%v", states)
+	}
+	e.Data.AgentStatus = "done"
+	if _, _, _, ok := EventTransition(states, e); ok || len(states) != 0 {
+		t.Fatalf("unseeded done event dispatched: states=%v", states)
 	}
 }
 
@@ -830,13 +842,77 @@ func TestFocusAPIRejectsMissingPaneBeforeFocus(t *testing.T) {
 	}
 }
 
-func TestRunEventsOnceUsesFreshSubscriptionConnection(t *testing.T) {
+func TestRunEventsOnceRejectsInvalidSeedSnapshot(t *testing.T) {
+	validShape := `{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}`
+	for name, response := range map[string]string{
+		"wrong ID":       `{"id":"other","result":` + validShape + `}`,
+		"error envelope": `{"id":"push-snapshot","error":{"code":-1}}`,
+		"missing result": `{"id":"push-snapshot"}`,
+		"malformed":      `{`,
+		"wrong type":     `{"id":"push-snapshot","result":{"type":"ok"}}`,
+		"wrong protocol": `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":15,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`,
+		"missing panes":  `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"layouts":[],"agents":[]}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := testService(t)
+			client, server := net.Pipe()
+			var dials atomic.Int32
+			svc.dial = func(context.Context, string, string) (net.Conn, error) {
+				dials.Add(1)
+				return client, nil
+			}
+			go func() {
+				defer server.Close()
+				scan := bufio.NewScanner(server)
+				if scan.Scan() {
+					_, _ = io.WriteString(server, response+"\n")
+				}
+			}()
+			if err := svc.runEventsOnce(context.Background(), "unused"); err == nil {
+				t.Fatal("invalid seed snapshot accepted")
+			}
+			if got := dials.Load(); got != 1 {
+				t.Fatalf("dials=%d want 1", got)
+			}
+		})
+	}
+}
+
+func TestPaneExistsRejectsIncompleteReplaySnapshot(t *testing.T) {
+	for name, response := range map[string]string{
+		"wrong protocol": `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":15,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p2"}],"layouts":[],"agents":[]}}}`,
+		"missing panes":  `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"layouts":[],"agents":[]}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := testService(t)
+			client, server := net.Pipe()
+			svc.dial = func(context.Context, string, string) (net.Conn, error) { return client, nil }
+			go func() {
+				defer server.Close()
+				scan := bufio.NewScanner(server)
+				if scan.Scan() {
+					_, _ = io.WriteString(server, response+"\n")
+				}
+			}()
+			if exists, err := svc.paneExists(context.Background(), "unused", "p2"); err == nil || exists {
+				t.Fatalf("incomplete replay snapshot accepted: exists=%t err=%v", exists, err)
+			}
+		})
+	}
+}
+
+func TestRunEventsOnceIgnoresStalePaneReplayAndResnapshotsNewPane(t *testing.T) {
 	svc, _ := testService(t)
+	var logs bytes.Buffer
+	svc.log = slog.New(slog.NewTextHandler(&logs, nil))
 	snapshotClient, snapshotServer := net.Pipe()
 	eventsClient, eventsServer := net.Pipe()
-	connections := make(chan net.Conn, 2)
-	connections <- snapshotClient
-	connections <- eventsClient
+	staleClient, staleServer := net.Pipe()
+	newClient, newServer := net.Pipe()
+	connections := make(chan net.Conn, 4)
+	for _, conn := range []net.Conn{snapshotClient, eventsClient, staleClient, newClient} {
+		connections <- conn
+	}
 	var dials atomic.Int32
 	svc.dial = func(context.Context, string, string) (net.Conn, error) {
 		dials.Add(1)
@@ -844,40 +920,47 @@ func TestRunEventsOnceUsesFreshSubscriptionConnection(t *testing.T) {
 	}
 	subscription := make(chan string, 1)
 	newPaneRead := make(chan struct{})
-	go func() {
-		defer snapshotServer.Close()
-		scan := bufio.NewScanner(snapshotServer)
+	serve := func(server net.Conn, response string) {
+		defer server.Close()
+		scan := bufio.NewScanner(server)
 		if scan.Scan() {
-			_, _ = io.WriteString(snapshotServer, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","terminal_id":"t1","workspace_id":"w1","tab_id":"tab1","focused":false,"agent_status":"working","revision":1}],"layouts":[],"agents":[]}}}`+"\n")
+			_, _ = io.WriteString(server, response+"\n")
 		}
-	}()
+	}
+	go serve(snapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","agent_status":"working"}],"layouts":[],"agents":[]}}}`)
+	go serve(staleServer, `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1"}],"layouts":[],"agents":[]}}}`)
+	go serve(newServer, `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1"},{"pane_id":"p2"}],"layouts":[],"agents":[]}}}`)
 	go func() {
 		defer eventsServer.Close()
 		scan := bufio.NewScanner(eventsServer)
 		if scan.Scan() {
 			subscription <- scan.Text()
-			if _, err := io.WriteString(eventsServer, `{"id":"push-events","result":{"type":"subscription_started"}}`+"\n"); err != nil {
-				return
-			}
-			if _, err := io.WriteString(eventsServer, `{"event":"pane_created","data":{"pane":{"pane_id":"p1"}}}`+"\n"); err != nil {
-				return
-			}
-			if _, err := io.WriteString(eventsServer, `{"event":"pane_created","data":{"pane":{"pane_id":"p2"}}}`+"\n"); err != nil {
-				return
+			for _, frame := range []string{
+				`{"id":"push-events","result":{"type":"subscription_started"}}`,
+				`{"event":"pane_created","data":{"pane":{"pane_id":"p1"}}}`,
+				`{"event":"pane_created","data":{"pane":{"pane_id":"stale"}}}`,
+				`{"event":"pane_created","data":{"pane":{"pane_id":"p2"}}}`,
+			} {
+				if _, err := io.WriteString(eventsServer, frame+"\n"); err != nil {
+					return
+				}
 			}
 			close(newPaneRead)
 		}
 	}()
 	if err := svc.runEventsOnce(context.Background(), "unused"); !errors.Is(err, errPaneSetChanged) {
-		t.Fatalf("pane creation did not request resnapshot: %v", err)
+		t.Fatalf("new pane did not request resnapshot: %v", err)
 	}
 	select {
 	case <-newPaneRead:
 	case <-time.After(time.Second):
-		t.Fatal("existing pane replay triggered resnapshot before new pane event")
+		t.Fatal("stale pane replay triggered resnapshot before new pane event")
 	}
-	if got := dials.Load(); got != 2 {
-		t.Fatalf("dial count=%d want 2", got)
+	if got := dials.Load(); got != 4 {
+		t.Fatalf("dial count=%d want 4", got)
+	}
+	if got := logs.String(); !strings.Contains(got, "reason=stale_pane") || !strings.Contains(got, "reason=new_pane") || strings.Contains(got, "p1") || strings.Contains(got, "p2") {
+		t.Fatalf("missing or unsafe pane replay diagnostics: %s", got)
 	}
 	select {
 	case request := <-subscription:
@@ -951,6 +1034,8 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.sender = fakeSender{status: http.StatusInternalServerError}
+	var eventLogs bytes.Buffer
+	svc.log = slog.New(slog.NewTextHandler(&eventLogs, nil))
 	eventSnapshotClient, eventSnapshotServer := net.Pipe()
 	eventClient, eventServer := net.Pipe()
 	eventConnections := make(chan net.Conn, 2)
@@ -961,18 +1046,22 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 		defer eventSnapshotServer.Close()
 		scan := bufio.NewScanner(eventSnapshotServer)
 		if scan.Scan() {
-			_, _ = io.WriteString(eventSnapshotServer, `{"result":{"snapshot":{"panes":[{"pane_id":"secret-pane","agent_status":"working"}]}}}`+"\n")
+			_, _ = io.WriteString(eventSnapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"secret-pane","agent_status":"working"}],"layouts":[],"agents":[]}}}`+"\n")
 		}
 	}()
 	go func() {
 		defer eventServer.Close()
 		scan := bufio.NewScanner(eventServer)
 		if scan.Scan() {
+			_, _ = io.WriteString(eventServer, `{"id":"push-events","result":{"type":"subscription_started"}}`+"\n")
 			_, _ = io.WriteString(eventServer, `{"event":"pane.agent_status_changed","data":{"pane_id":"secret-pane","agent_status":"done","agent":"secret-agent"}}`+"\n")
 		}
 	}()
 	if err := svc.runEventsOnce(context.Background(), "test.sock"); err == nil {
 		t.Fatal("closed event stream returned nil")
+	}
+	if logs := eventLogs.String(); !strings.Contains(logs, "Herdr event subscription started") || !strings.Contains(logs, "Herdr agent event handled") || !strings.Contains(logs, "reason=dispatch") || strings.Contains(logs, "secret-pane") || strings.Contains(logs, "secret-agent") {
+		t.Fatalf("missing or unsafe watcher diagnostics: %s", logs)
 	}
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/x"}`))
 	deleteReq.Header.Set("Remote-User", "alice")
@@ -1143,7 +1232,7 @@ func TestRunEventsOnceCancellationClosesOwnedConnections(t *testing.T) {
 					close(blocked)
 					return
 				}
-				_, _ = io.WriteString(snapshotServer, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`+"\n")
+				_, _ = io.WriteString(snapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`+"\n")
 			}()
 			if phase == "subscription scan" {
 				go func() {
@@ -1223,7 +1312,7 @@ func TestRunEventsOnceClosesConnectionsOnStreamEnd(t *testing.T) {
 		defer snapshotServer.Close()
 		scan := bufio.NewScanner(snapshotServer)
 		if scan.Scan() {
-			_, _ = io.WriteString(snapshotServer, `{"result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`+"\n")
+			_, _ = io.WriteString(snapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`+"\n")
 		}
 	}()
 	go func() {
