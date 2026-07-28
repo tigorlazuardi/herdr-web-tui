@@ -27,41 +27,47 @@ export async function registerPushWorker(): Promise<ServiceWorkerRegistration | 
   return navigator.serviceWorker.register('/sw.js', { scope: '/' })
 }
 
-/** Reads current server state, preserving backend error detail and correlation reference. */
+/** Reads server push capability, preserving backend error detail and correlation reference. */
 export async function pushConfig(): Promise<{ publicKey?: string; enabled: boolean }> {
   const response = await fetch('/api/push/config')
   if (!response.ok) throw await responseError(response, 'Push configuration failed')
   return await response.json() as { publicKey?: string; enabled: boolean }
 }
 
-/** Replaces browser subscription only after permission, then rolls it back if server persistence fails. */
+/** Upserts current browser subscription, creating and rolling back one only when absent. */
 export async function enablePush(registration: ServiceWorkerRegistration): Promise<void> {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') throw new Error(permission === 'denied' ? 'Notification permission denied' : 'Notification permission not granted')
   const config = await pushConfig()
   if (!config.publicKey) throw new Error('Push is not configured on server')
-  const old = await registration.pushManager.getSubscription()
-  if (old) await old.unsubscribe()
-  const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey(config.publicKey) })
+  const existing = await registration.pushManager.getSubscription()
+  const subscription = existing ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey(config.publicKey) })
   const response = await fetch('/api/push/subscription', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(subscription) })
   if (!response.ok) {
-    await subscription.unsubscribe()
+    if (!existing) await subscription.unsubscribe()
     throw await responseError(response, 'Saving push subscription failed')
   }
 }
 
-/** Deletes server state first so browser unsubscribe failure remains safely retryable and visible. */
+/** Deletes only current browser endpoint before native unsubscribe; absent local subscription is no-op. */
 export async function disablePush(registration: ServiceWorkerRegistration): Promise<void> {
-  const response = await fetch('/api/push/subscription', { method: 'DELETE' })
+  const subscription = await registration.pushManager.getSubscription()
+  if (!subscription) return
+  const response = await fetch('/api/push/subscription', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint: subscription.endpoint })
+  })
   if (!response.ok) throw await responseError(response, 'Disabling push failed')
-  await (await registration.pushManager.getSubscription())?.unsubscribe()
+  await subscription.unsubscribe()
 }
 
-/** Resolves initial UI feedback so mount/config failures cannot become silent idle state. */
-export async function initialPushFeedback(): Promise<PushFeedback> {
+/** Resolves local browser state while config reports server capability only. */
+export async function initialPushFeedback(registration: ServiceWorkerRegistration): Promise<PushFeedback> {
   try {
-    const config = await pushConfig()
-    if (config.enabled) return { state: 'enabled', message: '' }
+    const [config, subscription] = await Promise.all([pushConfig(), registration.pushManager.getSubscription()])
+    if (subscription) return { state: 'enabled', message: config.enabled ? '' : 'Push is not configured on server' }
+    if (!config.enabled) return { state: 'idle', message: 'Push is not configured on server' }
     if (Notification.permission === 'denied') return { state: 'denied', message: 'Notification permission denied' }
     return { state: 'idle', message: '' }
   } catch (error) {

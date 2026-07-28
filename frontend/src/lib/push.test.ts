@@ -35,6 +35,16 @@ describe('push lifecycle', () => {
     expect(fetch).toHaveBeenLastCalledWith('/api/push/subscription', expect.objectContaining({ method: 'PUT' }))
   })
 
+  it('upserts an existing local subscription without unsubscribing it', async () => {
+    const subscription = { endpoint: 'https://push.example/current', unsubscribe: vi.fn() }
+    const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription), subscribe: vi.fn() } } as unknown as ServiceWorkerRegistration
+    vi.stubGlobal('Notification', { requestPermission: vi.fn().mockResolvedValue('granted') })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: 'YQ', enabled: true }))).mockResolvedValueOnce(new Response(null, { status: 204 })))
+    await enablePush(registration)
+    expect(registration.pushManager.subscribe).not.toHaveBeenCalled()
+    expect(subscription.unsubscribe).not.toHaveBeenCalled()
+  })
+
   it('surfaces denied permission', async () => {
     vi.stubGlobal('Notification', { requestPermission: vi.fn().mockResolvedValue('denied') })
     await expect(enablePush({} as ServiceWorkerRegistration)).rejects.toThrow('permission denied')
@@ -44,7 +54,8 @@ describe('push lifecycle', () => {
     vi.stubGlobal('Notification', { permission: 'default' })
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response('authentication required', { status: 401, headers: { 'X-Request-Id': 'req-123' } }))))
     await expect(pushConfig()).rejects.toThrow('Push configuration failed (401): authentication required [ref: req-123]')
-    await expect(initialPushFeedback()).resolves.toEqual({ state: 'error', message: 'Push configuration failed (401): authentication required [ref: req-123]' })
+    const registration = { pushManager: { getSubscription: vi.fn() } } as unknown as ServiceWorkerRegistration
+    await expect(initialPushFeedback(registration)).resolves.toEqual({ state: 'error', message: 'Push configuration failed (401): authentication required [ref: req-123]' })
   })
 
   it('surfaces save body and fallback correlation reference then rolls browser subscription back', async () => {
@@ -59,18 +70,38 @@ describe('push lifecycle', () => {
 
   it('surfaces delete body and correlation without unsubscribing browser', async () => {
     const unsubscribe = vi.fn()
-    const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue({ unsubscribe }) } } as unknown as ServiceWorkerRegistration
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('owner conflict', { status: 409, headers: { 'X-Request-Id': 'req-409' } })))
-    await expect(disablePush(registration)).rejects.toThrow('Disabling push failed (409): owner conflict [ref: req-409]')
+    const subscription = { endpoint: 'https://push.example/current', unsubscribe }
+    const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } } as unknown as ServiceWorkerRegistration
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('disk failed', { status: 500, headers: { 'X-Request-Id': 'req-500' } })))
+    await expect(disablePush(registration)).rejects.toThrow('Disabling push failed (500): disk failed [ref: req-500]')
     expect(unsubscribe).not.toHaveBeenCalled()
   })
 
-  it('deletes server subscription before browser subscription', async () => {
+  it('deletes endpoint-specific server subscription before browser subscription', async () => {
     const unsubscribe = vi.fn()
-    const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue({ unsubscribe }) } } as unknown as ServiceWorkerRegistration
+    const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue({ endpoint: 'https://push.example/current', unsubscribe }) } } as unknown as ServiceWorkerRegistration
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })))
     await disablePush(registration)
+    expect(fetch).toHaveBeenCalledWith('/api/push/subscription', expect.objectContaining({ method: 'DELETE', body: '{"endpoint":"https://push.example/current"}' }))
     expect(unsubscribe).toHaveBeenCalled()
+  })
+
+  it('uses local subscription for initial enabled state', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' })
+    const getSubscription = vi.fn().mockResolvedValue({ endpoint: 'https://push.example/current' })
+    const registration = { pushManager: { getSubscription } } as unknown as ServiceWorkerRegistration
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: 'YQ', enabled: true }))))
+    await expect(initialPushFeedback(registration)).resolves.toEqual({ state: 'enabled', message: '' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ enabled: false }))))
+    await expect(initialPushFeedback(registration)).resolves.toEqual({ state: 'enabled', message: 'Push is not configured on server' })
+    expect(getSubscription).toHaveBeenCalledTimes(2)
+  })
+
+  it('does nothing when browser has no local subscription', async () => {
+    const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue(null) } } as unknown as ServiceWorkerRegistration
+    vi.stubGlobal('fetch', vi.fn())
+    await disablePush(registration)
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('turns subscription lookup rejection into visible error feedback', async () => {

@@ -14,7 +14,8 @@
     void (async () => {
       try {
         registration = await registerPushWorker()
-        const feedback = await initialPushFeedback()
+        if (!registration) throw new Error('Push worker registration unavailable')
+        const feedback = await initialPushFeedback(registration)
         pushState = feedback.state; message = feedback.message
       } catch (error) { pushState = 'error'; message = error instanceof Error ? error.message : String(error) }
     })()

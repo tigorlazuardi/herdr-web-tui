@@ -157,7 +157,7 @@ expected_id="/pwa/$(printf %s "$OPERATOR" | sha256sum | cut -d' ' -f1)"
 
 ## 4. Background Web Push
 
-Installed Android PWAs can receive agent `done`/`blocked` notifications while closed. HTTPS and an authenticated gateway-provided `Remote-User` header are required. UI enables one subscription for one authenticated user; another identity receives HTTP 409 until current identity disables it. Focused app windows suppress notification display locally.
+Installed Android PWAs can receive agent `done`/`blocked` notifications while closed. HTTPS and an authenticated gateway-provided `Remote-User` header are required. Every browser that enables notifications receives each eligible notification; registration state remains local to each browser, while backend stores a global endpoint-deduplicated subscription list. Focused app windows suppress notification display locally.
 
 Configure VAPID keys outside repository:
 
@@ -175,9 +175,15 @@ must create parent directories, provision file at configured runtime path before
 service starts, restrict file mode to `0600`, and ensure service user can read
 file. Operator must also make `WEB_PUSH_STORE_PATH` parent directory writable by
 service user and protect it from other users; subscription store is written
-atomically with mode `0600`. `HERDR_SOCKET_PATH` must name socket service user
-can access. All three VAPID values must be set together. Key rotation requires
-user to disable then re-enable notifications. Standard `OTEL_EXPORTER_OTLP_*`
+atomically with mode `0600`. Upgrading from the legacy single-subscription format
+performs a one-way rewrite on the first subscription mutation. Before rewriting,
+the service creates `<WEB_PUSH_STORE_PATH>.legacy-v1.bak` with mode `0600` and
+refuses migration if an existing backup differs. Keep this backup until rollback
+is no longer required. To roll back: stop the service, copy the backup over
+`WEB_PUSH_STORE_PATH`, restore owner/mode `0600`, then start the legacy release;
+subscriptions registered only after upgrade must re-enable notifications.
+`HERDR_SOCKET_PATH` must name socket service user can access. All three VAPID values must be set together. Key rotation requires
+each browser to disable then re-enable notifications. Standard `OTEL_EXPORTER_OTLP_*`
 variables enable OTLP traces and metrics; without endpoint providers remain
 active for correlated local slog and discard export. Service worker handles
 only push/click—no offline cache or fetch interception.

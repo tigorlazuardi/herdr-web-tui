@@ -1,4 +1,4 @@
-// Package push implements one-user Web Push subscription storage and dispatch.
+// Package push implements global Web Push subscription storage and dispatch.
 package push
 
 import (
@@ -80,20 +80,25 @@ func ConfigFromEnv() (Config, error) {
 // Enabled reports whether complete VAPID configuration is present.
 func (c Config) Enabled() bool { return c.PublicKey != "" }
 
-type record struct {
+type storeFile struct {
+	Subscriptions []webpush.Subscription `json:"subscriptions"`
+}
+
+type legacyRecord struct {
 	User         string               `json:"user"`
 	Subscription webpush.Subscription `json:"subscription"`
 }
 
-// Store atomically persists one authenticated user's subscription.
+// Store atomically persists a global endpoint-deduplicated subscription list.
 type Store struct {
-	path   string
-	mu     sync.RWMutex
-	rec    *record
-	remove func(string) error
+	path          string
+	mu            sync.RWMutex
+	subscriptions []webpush.Subscription
+	legacyRaw     []byte
+	remove        func(string) error
 }
 
-// OpenStore loads a subscription store or creates an empty in-memory view when absent.
+// OpenStore loads current subscription storage plus deployed legacy single-user shape.
 func OpenStore(path string) (*Store, error) {
 	s := &Store{path: path, remove: os.Remove}
 	b, err := os.ReadFile(path)
@@ -101,39 +106,109 @@ func OpenStore(path string) (*Store, error) {
 		return s, nil
 	}
 	if err != nil {
-		return nil, errors.Wrap(err, "read push subscription")
+		return nil, errors.Wrap(err, "read push subscriptions")
 	}
-	if err := json.Unmarshal(b, &s.rec); err != nil {
-		return nil, errors.Wrap(err, "decode push subscription")
+	var current storeFile
+	if err := json.Unmarshal(b, &current); err == nil && current.Subscriptions != nil {
+		for _, sub := range current.Subscriptions {
+			if !validSubscription(sub) {
+				return nil, errors.New("invalid push subscription store")
+			}
+			s.upsert(sub)
+		}
+		return s, nil
 	}
-	if s.rec == nil || s.rec.User == "" {
+	var legacy legacyRecord
+	if err := json.Unmarshal(b, &legacy); err != nil || legacy.User == "" || !validSubscription(legacy.Subscription) {
 		return nil, errors.New("invalid push subscription store")
 	}
+	s.subscriptions = []webpush.Subscription{legacy.Subscription}
+	s.legacyRaw = append([]byte(nil), b...)
 	return s, nil
 }
 
-// Get returns a snapshot safe from later store replacement.
-func (s *Store) Get() *record {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.rec == nil {
-		return nil
+func (s *Store) upsert(sub webpush.Subscription) {
+	for i := range s.subscriptions {
+		if s.subscriptions[i].Endpoint == sub.Endpoint {
+			s.subscriptions[i] = sub
+			return
+		}
 	}
-	r := *s.rec
-	return &r
+	s.subscriptions = append(s.subscriptions, sub)
 }
 
-// Put atomically replaces this user's subscription without allowing another identity.
-func (s *Store) Put(user string, sub webpush.Subscription) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.rec != nil && s.rec.User != user {
-		return ErrDifferentUser
-	}
-	r := &record{User: user, Subscription: sub}
-	b, err := json.Marshal(r)
+// Get returns a subscription snapshot safe from later mutations.
+func (s *Store) Get() []webpush.Subscription {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]webpush.Subscription(nil), s.subscriptions...)
+}
+
+func syncParentDirectory(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
-		return errors.Wrap(err, "encode push subscription")
+		return err
+	}
+	if err = dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
+}
+
+// ensureLegacyBackup preserves the deployed single-subscription file before its first one-way rewrite.
+func (s *Store) ensureLegacyBackup() error {
+	if len(s.legacyRaw) == 0 {
+		return nil
+	}
+	backup := s.path + ".legacy-v1.bak"
+	if existing, err := os.ReadFile(backup); err == nil {
+		if string(existing) != string(s.legacyRaw) {
+			return errors.New("legacy push subscription backup differs; preserve it before migration")
+		}
+		if err := syncParentDirectory(backup); err != nil {
+			return errors.Wrap(err, "sync legacy push subscription backup directory")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.Wrap(err, "read legacy push subscription backup")
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".push-legacy-*")
+	if err != nil {
+		return errors.Wrap(err, "create legacy push subscription backup")
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err = tmp.Chmod(0600); err == nil {
+		_, err = tmp.Write(s.legacyRaw)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Link(name, backup)
+	}
+	if err != nil {
+		return errors.Wrap(err, "persist legacy push subscription backup")
+	}
+	if err := syncParentDirectory(backup); err != nil {
+		return errors.Wrap(err, "sync legacy push subscription backup directory")
+	}
+	return nil
+}
+
+// persist atomically writes current global shape. Caller holds s.mu.
+func (s *Store) persist(subscriptions []webpush.Subscription) error {
+	if err := s.ensureLegacyBackup(); err != nil {
+		return err
+	}
+	b, err := json.Marshal(storeFile{Subscriptions: subscriptions})
+	if err != nil {
+		return errors.Wrap(err, "encode push subscriptions")
 	}
 	if err = os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return errors.Wrap(err, "create push store directory")
@@ -158,45 +233,78 @@ func (s *Store) Put(user string, sub webpush.Subscription) error {
 		err = os.Rename(name, s.path)
 	}
 	if err != nil {
-		return errors.Wrap(err, "persist push subscription")
+		return errors.Wrap(err, "persist push subscriptions")
 	}
-	s.rec = r
+	s.subscriptions = subscriptions
+	s.legacyRaw = nil
 	return nil
 }
 
-// Delete removes this user's current subscription.
-func (s *Store) Delete(user string) error {
+// Put atomically upserts one subscription keyed by endpoint.
+func (s *Store) Put(sub webpush.Subscription) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.rec == nil {
-		return nil
+	next := append([]webpush.Subscription(nil), s.subscriptions...)
+	for i := range next {
+		if next[i].Endpoint == sub.Endpoint {
+			next[i] = sub
+			return s.persist(next)
+		}
 	}
-	if s.rec.User != user {
-		return ErrDifferentUser
+	return s.persist(append(next, sub))
+}
+
+// Delete atomically removes only matching endpoint.
+func (s *Store) Delete(endpoint string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.subscriptions {
+		if s.subscriptions[i].Endpoint != endpoint {
+			continue
+		}
+		next := append([]webpush.Subscription(nil), s.subscriptions[:i]...)
+		next = append(next, s.subscriptions[i+1:]...)
+		if err := s.persistDelete(next); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// persistDelete removes empty storage atomically or persists remaining subscriptions. Caller holds s.mu.
+func (s *Store) persistDelete(next []webpush.Subscription) error {
+	if len(next) != 0 {
+		return s.persist(next)
+	}
+	if err := s.ensureLegacyBackup(); err != nil {
+		return err
 	}
 	if err := s.remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errors.Wrap(err, "remove push subscription")
+		return errors.Wrap(err, "remove push subscriptions")
 	}
-	s.rec = nil
+	s.subscriptions = nil
+	s.legacyRaw = nil
 	return nil
 }
 
-// DeleteIfMatch atomically removes only the exact subscription used by a stale dispatch.
-func (s *Store) DeleteIfMatch(snapshot *record) (bool, error) {
+// DeleteIfMatch atomically removes exact stale snapshot, preserving endpoint replacements.
+func (s *Store) DeleteIfMatch(snapshot webpush.Subscription) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if snapshot == nil || s.rec == nil || s.rec.User != snapshot.User || s.rec.Subscription != snapshot.Subscription {
-		return false, nil
+	for i := range s.subscriptions {
+		if s.subscriptions[i] != snapshot {
+			continue
+		}
+		next := append([]webpush.Subscription(nil), s.subscriptions[:i]...)
+		next = append(next, s.subscriptions[i+1:]...)
+		if err := s.persistDelete(next); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	if err := s.remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, errors.Wrap(err, "remove stale push subscription")
-	}
-	s.rec = nil
-	return true, nil
+	return false, nil
 }
-
-// ErrDifferentUser prevents cross-identity replacement in single-user deployments.
-var ErrDifferentUser = errors.New("another authenticated user already owns the active subscription")
 
 // Sender is the narrow outbound seam used by dispatch tests.
 type Sender interface {
@@ -245,11 +353,7 @@ func NewServiceWithSender(c Config, store *Store, log *slog.Logger, sender Sende
 	focusAttempts, _ := m.Int64Counter("web_push.pane_focus.attempts")
 	svc := &Service{cfg: c, store: store, log: log, sender: sender, dial: (&net.Dialer{}).DialContext, mutations: mutations, attempts: attempts, latency: latency, payload: payload, focusAttempts: focusAttempts}
 	svc.activeRegistration, _ = m.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
-		if store.Get() != nil {
-			observer.ObserveInt64(active, 1)
-		} else {
-			observer.ObserveInt64(active, 0)
-		}
+		observer.ObserveInt64(active, int64(len(store.Get())))
 		return nil
 	}, active)
 	return svc
@@ -376,26 +480,19 @@ func (s *Service) Handler() http.Handler {
 	return mux
 }
 
-// config returns public browser configuration without secret subscription material.
+// config returns server capability without global registration state.
 func (s *Service) config(w http.ResponseWriter, r *http.Request) {
-	u, ok := user(r)
-	if !ok {
+	if _, ok := user(r); !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	rec := s.store.Get()
-	if rec != nil && rec.User != u {
-		http.Error(w, "different authenticated user owns subscription", http.StatusConflict)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"publicKey": s.cfg.PublicKey, "enabled": rec != nil})
+	_ = json.NewEncoder(w).Encode(map[string]any{"publicKey": s.cfg.PublicKey, "enabled": s.cfg.Enabled()})
 }
 
-// put validates exactly one bounded subscription document before atomic persistence.
+// put validates one bounded subscription document before endpoint-keyed atomic upsert.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
-	u, ok := user(r)
-	if !ok {
+	if _, ok := user(r); !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
@@ -417,12 +514,8 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid push subscription", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.Put(u, sub); err != nil {
-		if errors.Is(err, ErrDifferentUser) {
-			http.Error(w, err.Error(), http.StatusConflict)
-		} else {
-			http.Error(w, "could not persist subscription", http.StatusInternalServerError)
-		}
+	if err := s.store.Put(sub); err != nil {
+		http.Error(w, "could not persist subscription", http.StatusInternalServerError)
 		return
 	}
 	s.mutations.Add(r.Context(), 1, metric.WithAttributes(attribute.String("outcome", "enabled")))
@@ -637,24 +730,45 @@ func (s *Service) focusPane(ctx context.Context, paneID string) error {
 	return errPaneNotFound
 }
 
-// del removes only the authenticated user's subscription.
+type deleteRequest struct {
+	Endpoint string `json:"endpoint"`
+}
+
+// del removes only endpoint supplied by authenticated caller browser.
 func (s *Service) del(w http.ResponseWriter, r *http.Request) {
-	u, ok := user(r)
-	if !ok {
+	if _, ok := user(r); !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	if err := s.store.Delete(u); err != nil {
-		if errors.Is(err, ErrDifferentUser) {
-			http.Error(w, err.Error(), http.StatusConflict)
-		} else {
-			http.Error(w, "could not remove subscription", http.StatusInternalServerError)
-		}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	var input deleteRequest
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(&input); err != nil {
+		http.Error(w, "invalid push subscription", http.StatusBadRequest)
+		return
+	}
+	var trailing any
+	if err := d.Decode(&trailing); err != io.EOF {
+		http.Error(w, "invalid push subscription", http.StatusBadRequest)
+		return
+	}
+	if !validEndpoint(input.Endpoint) {
+		http.Error(w, "invalid push subscription", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.store.Delete(input.Endpoint); err != nil {
+		http.Error(w, "could not remove subscription", http.StatusInternalServerError)
 		return
 	}
 	s.mutations.Add(r.Context(), 1, metric.WithAttributes(attribute.String("outcome", "disabled")))
-	s.log.InfoContext(r.Context(), "push subscription disabled")
+	s.log.InfoContext(r.Context(), "push subscription disabled", "push.endpoint", "<redacted>")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	return err == nil && len(endpoint) <= maxBody && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Fragment == ""
 }
 
 type sanitizedSendError struct {
@@ -685,13 +799,13 @@ func sanitizeSendError(err error) error {
 	return &sanitizedSendError{kind: kind, cause: err}
 }
 
-// Notify sends bounded JSON notification payload and atomically prunes only its stale snapshot.
+// Notify sends bounded JSON to every snapshot subscription, then returns one bounded aggregate error.
 func (s *Service) Notify(ctx context.Context, agent, state, paneID string) error {
 	if state != "done" && state != "blocked" {
 		return nil
 	}
-	rec := s.store.Get()
-	if rec == nil {
+	subscriptions := s.store.Get()
+	if len(subscriptions) == 0 {
 		return nil
 	}
 	ctx, span := otel.Tracer("herdr-web-tui/push").Start(ctx, "push dispatch")
@@ -709,37 +823,77 @@ func (s *Service) Notify(ctx context.Context, agent, state, paneID string) error
 		return err
 	}
 	s.payload.Record(ctx, int64(len(payload)))
+	failures := 0
+	lastStatusClass := "none"
+	failureOutcome, failureStatusClass, failureErrorKind := "failure", "none", "none"
+	var lastCause error
+	for _, sub := range subscriptions {
+		outcome, statusClass, errorKind, cause := s.sendOne(ctx, payload, state, sub)
+		lastStatusClass = statusClass
+		if cause != nil {
+			failures++
+			failureOutcome, failureStatusClass, failureErrorKind = outcome, statusClass, errorKind
+			lastCause = cause
+		}
+		attrs := metric.WithAttributes(attribute.String("event.type", state), attribute.String("outcome", outcome), attribute.String("status_class", statusClass))
+		s.attempts.Add(ctx, 1, attrs)
+		s.log.InfoContext(ctx, "push dispatch", "outcome", outcome, "status_class", statusClass, "agent.name", "<redacted>", "push.endpoint", "<redacted>")
+	}
+	outcome := "success"
+	if failures != 0 {
+		outcome = "failure"
+		err := &broadcastError{failures: failures, total: len(subscriptions), cause: lastCause}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "push dispatch failed")
+		span.SetAttributes(attribute.String("outcome", failureOutcome), attribute.String("status_class", failureStatusClass), attribute.String("error.kind", failureErrorKind))
+		return err
+	}
+	span.SetAttributes(attribute.String("outcome", outcome), attribute.String("status_class", lastStatusClass), attribute.String("error.kind", "none"))
+	return nil
+}
+
+type broadcastError struct {
+	failures, total int
+	cause           error
+}
+
+func (e *broadcastError) Error() string {
+	return fmt.Sprintf("web push broadcast failed: %d of %d attempts", e.failures, e.total)
+}
+func (e *broadcastError) Unwrap() error { return e.cause }
+
+// sendOne records one independently classified push-service attempt and stale prune.
+func (s *Service) sendOne(ctx context.Context, payload []byte, state string, sub webpush.Subscription) (outcome, statusClass, errorKind string, cause error) {
 	attemptCtx, attemptSpan := otel.Tracer("herdr-web-tui/push").Start(ctx, "push-service HTTP attempt")
 	attemptSpan.SetAttributes(attribute.String("push.endpoint", "<redacted>"), attribute.String("auth", "<redacted>"), attribute.String("p256dh", "<redacted>"))
 	start := time.Now()
-	resp, sendErr := s.sender.Send(attemptCtx, payload, &rec.Subscription, &webpush.Options{Subscriber: strings.TrimPrefix(s.cfg.Subject, "mailto:"), VAPIDPublicKey: s.cfg.PublicKey, VAPIDPrivateKey: s.cfg.PrivateKey, TTL: 60})
+	resp, sendErr := s.sender.Send(attemptCtx, payload, &sub, &webpush.Options{Subscriber: strings.TrimPrefix(s.cfg.Subject, "mailto:"), VAPIDPublicKey: s.cfg.PublicKey, VAPIDPrivateKey: s.cfg.PrivateKey, TTL: 60})
 	safeErr := sanitizeSendError(sendErr)
-	ms := float64(time.Since(start).Microseconds()) / 1000
-	s.latency.Record(ctx, ms)
-	outcome, statusClass, errorKind := "success", "none", "none"
+	s.latency.Record(ctx, float64(time.Since(start).Microseconds())/1000)
+	outcome, statusClass, errorKind = "success", "none", "none"
 	if resp != nil {
-		defer resp.Body.Close()
 		statusClass = fmt.Sprintf("%dxx", resp.StatusCode/100)
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 	}
 	if safeErr != nil {
-		outcome, errorKind = "failure", safeErr.(*sanitizedSendError).kind
+		outcome, errorKind, cause = "failure", safeErr.(*sanitizedSendError).kind, safeErr
 		attemptSpan.RecordError(safeErr)
-		attemptSpan.SetStatus(codes.Error, "push failed")
 	} else if resp == nil {
-		outcome, errorKind = "failure", "missing_response"
-		err := errors.New("web push transport returned no response")
-		attemptSpan.RecordError(err)
-		attemptSpan.SetStatus(codes.Error, "push failed")
+		outcome, errorKind, cause = "failure", "missing_response", errors.New("web push transport returned no response")
+		attemptSpan.RecordError(cause)
 	} else if resp.StatusCode >= 300 {
-		outcome, errorKind = "failure", "http_status"
-		err := errors.New("push service returned unsuccessful status class")
-		attemptSpan.RecordError(err)
+		outcome, errorKind, cause = "failure", "http_status", errors.New("push service returned unsuccessful status class")
+		attemptSpan.RecordError(cause)
+	}
+	if cause != nil {
 		attemptSpan.SetStatus(codes.Error, "push failed")
 	}
-	attemptSpan.SetAttributes(attribute.String("outcome", outcome), attribute.String("status_class", statusClass), attribute.String("error.kind", errorKind))
+	attemptSpan.SetAttributes(attribute.String("outcome", map[bool]string{true: "failure", false: "success"}[cause != nil]), attribute.String("status_class", statusClass), attribute.String("error.kind", errorKind))
 	attemptSpan.End()
 	if resp != nil && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone) {
-		pruned, deleteErr := s.store.DeleteIfMatch(rec)
+		pruned, deleteErr := s.store.DeleteIfMatch(sub)
 		if deleteErr != nil {
 			outcome, errorKind = "stale_prune_failed", "persistence"
 			s.log.ErrorContext(ctx, "stale push subscription removal failed", "error", deleteErr, "push.endpoint", "<redacted>")
@@ -750,23 +904,5 @@ func (s *Service) Notify(ctx context.Context, agent, state, paneID string) error
 			outcome = "stale_replaced"
 		}
 	}
-	if outcome != "success" {
-		spanErr := errors.New("web push dispatch failed: " + errorKind)
-		span.RecordError(spanErr)
-		span.SetStatus(codes.Error, "push dispatch failed")
-	}
-	span.SetAttributes(attribute.String("outcome", outcome), attribute.String("status_class", statusClass), attribute.String("error.kind", errorKind))
-	attrs := metric.WithAttributes(attribute.String("event.type", state), attribute.String("outcome", outcome), attribute.String("status_class", statusClass))
-	s.attempts.Add(ctx, 1, attrs)
-	s.log.InfoContext(ctx, "push dispatch", "outcome", outcome, "status_class", statusClass, "agent.name", "<redacted>", "push.endpoint", "<redacted>")
-	if safeErr != nil {
-		return safeErr
-	}
-	if resp == nil {
-		return errors.New("web push transport returned no response")
-	}
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("push service returned status class %s", statusClass)
-	}
-	return nil
+	return
 }

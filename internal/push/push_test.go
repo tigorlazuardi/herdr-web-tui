@@ -50,6 +50,20 @@ type fakeSender struct {
 	options func(*webpush.Options)
 }
 
+type sequenceSender struct {
+	statuses map[string]int
+	seen     []string
+}
+
+func (f *sequenceSender) Send(_ context.Context, _ []byte, sub *webpush.Subscription, _ *webpush.Options) (*http.Response, error) {
+	f.seen = append(f.seen, sub.Endpoint)
+	status := f.statuses[sub.Endpoint]
+	if status == 0 {
+		status = http.StatusCreated
+	}
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(""))}, nil
+}
+
 func (f fakeSender) Send(_ context.Context, payload []byte, _ *webpush.Subscription, options *webpush.Options) (*http.Response, error) {
 	if f.before != nil {
 		f.before()
@@ -77,13 +91,16 @@ func subWithEndpoint(endpoint string) webpush.Subscription {
 
 func sub() webpush.Subscription { return subWithEndpoint("https://push.example/x") }
 
-func TestStoreSecureSingleUser(t *testing.T) {
+func TestStoreDeduplicatesEndpoints(t *testing.T) {
 	_, s := testService(t)
-	if err := s.Put("alice", sub()); err != nil {
+	if err := s.Put(sub()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("bob", sub()); !errors.Is(err, ErrDifferentUser) {
-		t.Fatalf("got %v", err)
+	if err := s.Put(sub()); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Get(); len(got) != 1 {
+		t.Fatalf("subscriptions=%d want 1", len(got))
 	}
 	info, err := os.Stat(s.path)
 	if err != nil {
@@ -91,6 +108,48 @@ func TestStoreSecureSingleUser(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("mode %o", info.Mode().Perm())
+	}
+}
+
+func TestStoreRejectsInvalidPersistedSubscription(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "push.json")
+	body, _ := json.Marshal(storeFile{Subscriptions: []webpush.Subscription{{Endpoint: "https://push.example/x"}}})
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenStore(path); err == nil {
+		t.Fatal("invalid persisted key material accepted")
+	}
+}
+
+func TestStoreLoadsLegacyAndRewritesCurrentShape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "push.json")
+	legacy, _ := json.Marshal(legacyRecord{User: "alice", Subscription: sub()})
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(path)
+	if err != nil || len(store.Get()) != 1 {
+		t.Fatalf("legacy load: subscriptions=%v err=%v", store.Get(), err)
+	}
+	if err := store.Put(subWithEndpoint("https://push.example/new")); err != nil {
+		t.Fatal(err)
+	}
+	var current storeFile
+	body, _ := os.ReadFile(path)
+	if err := json.Unmarshal(body, &current); err != nil || len(current.Subscriptions) != 2 || bytes.Contains(body, []byte(`"user"`)) {
+		t.Fatalf("current rewrite=%s err=%v", body, err)
+	}
+	backup, err := os.ReadFile(path + ".legacy-v1.bak")
+	if err != nil || !bytes.Equal(backup, legacy) {
+		t.Fatalf("legacy backup=%s err=%v", backup, err)
+	}
+	if err := os.WriteFile(path, backup, 0600); err != nil {
+		t.Fatal(err)
+	}
+	rolledBack, err := OpenStore(path)
+	if err != nil || len(rolledBack.Get()) != 1 || rolledBack.Get()[0].Endpoint != sub().Endpoint {
+		t.Fatalf("rollback recovery: subscriptions=%v err=%v", rolledBack.Get(), err)
 	}
 }
 
@@ -150,7 +209,7 @@ func TestPutValidationRejectsMalformedInput(t *testing.T) {
 			r.Header.Set("Remote-User", "alice")
 			w := httptest.NewRecorder()
 			svc.Handler().ServeHTTP(w, r)
-			if w.Code != http.StatusBadRequest || store.Get() != nil {
+			if w.Code != http.StatusBadRequest || len(store.Get()) != 0 {
 				t.Fatalf("code=%d record=%v", w.Code, store.Get())
 			}
 		})
@@ -171,14 +230,14 @@ func TestAPIAuthenticationLifecycle(t *testing.T) {
 	r.Header.Set("Remote-User", "alice")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusNoContent || s.Get() == nil {
+	if w.Code != http.StatusNoContent || len(s.Get()) == 0 {
 		t.Fatalf("code=%d record=%v", w.Code, s.Get())
 	}
-	r = httptest.NewRequest(http.MethodDelete, "/api/push/subscription", nil)
+	r = httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/x"}`))
 	r.Header.Set("Remote-User", "alice")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusNoContent || s.Get() != nil {
+	if w.Code != http.StatusNoContent || len(s.Get()) != 0 {
 		t.Fatal(w.Code)
 	}
 }
@@ -300,9 +359,68 @@ func TestTransitionFiltersSnapshotsAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestNotifyBroadcastReportsFailureEvenWhenLaterEndpointSucceeds(t *testing.T) {
+	svc, store := testService(t)
+	failed := subWithEndpoint("https://push.example/failed")
+	live := subWithEndpoint("https://push.example/live")
+	if err := store.Put(failed); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(live); err != nil {
+		t.Fatal(err)
+	}
+	svc.sender = &sequenceSender{statuses: map[string]int{failed.Endpoint: http.StatusInternalServerError}}
+	if err := svc.Notify(context.Background(), "agent", "done", "w1:p2"); err == nil || err.Error() != "web push broadcast failed: 1 of 2 attempts" {
+		t.Fatalf("aggregate error=%v", err)
+	}
+}
+
+func TestNotifyBroadcastAttemptsAllAndPrunesOnlyStaleEndpoint(t *testing.T) {
+	svc, store := testService(t)
+	stale := subWithEndpoint("https://push.example/stale")
+	live := subWithEndpoint("https://push.example/live")
+	if err := store.Put(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(live); err != nil {
+		t.Fatal(err)
+	}
+	sender := &sequenceSender{statuses: map[string]int{stale.Endpoint: http.StatusGone}}
+	svc.sender = sender
+	if err := svc.Notify(context.Background(), "agent", "done", "w1:p2"); err == nil || err.Error() != "web push broadcast failed: 1 of 2 attempts" {
+		t.Fatalf("aggregate error=%v", err)
+	}
+	if !slices.Equal(sender.seen, []string{stale.Endpoint, live.Endpoint}) {
+		t.Fatalf("attempts=%v", sender.seen)
+	}
+	got := store.Get()
+	if len(got) != 1 || got[0].Endpoint != live.Endpoint {
+		t.Fatalf("post-prune subscriptions=%v", got)
+	}
+}
+
+func TestDeleteAPIOnlyRemovesRequestedEndpoint(t *testing.T) {
+	svc, store := testService(t)
+	first, second := subWithEndpoint("https://push.example/first"), subWithEndpoint("https://push.example/second")
+	if err := store.Put(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(second); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/first"}`))
+	req.Header.Set("Remote-User", "any-authenticated-user")
+	response := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(response, req)
+	got := store.Get()
+	if response.Code != http.StatusNoContent || len(got) != 1 || got[0].Endpoint != second.Endpoint {
+		t.Fatalf("code=%d subscriptions=%v", response.Code, got)
+	}
+}
+
 func TestNotifyPayloadContainsPaneIDWithoutURL(t *testing.T) {
 	svc, store := testService(t)
-	if err := store.Put("alice", sub()); err != nil {
+	if err := store.Put(sub()); err != nil {
 		t.Fatal(err)
 	}
 	var payload map[string]any
@@ -329,7 +447,7 @@ func TestNotifyNormalizesSubscriberForWebpushGo(t *testing.T) {
 	} {
 		t.Run(test.subject, func(t *testing.T) {
 			svc, store := testService(t)
-			if err := store.Put("alice", sub()); err != nil {
+			if err := store.Put(sub()); err != nil {
 				t.Fatal(err)
 			}
 			var logs bytes.Buffer
@@ -355,25 +473,25 @@ func TestNotifyStaleResponseDoesNotDeleteReplacement(t *testing.T) {
 	svc, s := testService(t)
 	original := subWithEndpoint("https://push.example/old")
 	replacement := subWithEndpoint("https://push.example/new")
-	if err := s.Put("alice", original); err != nil {
+	if err := s.Put(original); err != nil {
 		t.Fatal(err)
 	}
 	svc.sender = fakeSender{status: http.StatusGone, before: func() {
-		if err := s.Put("alice", replacement); err != nil {
+		if err := s.Put(replacement); err != nil {
 			t.Fatal(err)
 		}
 	}}
 	if err := svc.Notify(context.Background(), "secret-agent", "done", "w1:p1"); err == nil {
 		t.Fatal("expected status error")
 	}
-	if got := s.Get(); got == nil || got.Subscription.Endpoint != replacement.Endpoint {
+	if got := s.Get(); len(got) != 1 || got[0].Endpoint != replacement.Endpoint {
 		t.Fatalf("replacement deleted: %#v", got)
 	}
 }
 
 func TestNotifyStaleDeleteFailureRetainsRecord(t *testing.T) {
 	svc, s := testService(t)
-	if err := s.Put("alice", sub()); err != nil {
+	if err := s.Put(sub()); err != nil {
 		t.Fatal(err)
 	}
 	s.remove = func(string) error { return errors.New("disk unavailable") }
@@ -381,7 +499,7 @@ func TestNotifyStaleDeleteFailureRetainsRecord(t *testing.T) {
 	if err := svc.Notify(context.Background(), "secret-agent", "done", "w1:p1"); err == nil {
 		t.Fatal("expected status error")
 	}
-	if s.Get() == nil {
+	if len(s.Get()) == 0 {
 		t.Fatal("record removed despite persistence failure")
 	}
 }
@@ -391,7 +509,7 @@ func TestNotifySanitizesURLBearingError(t *testing.T) {
 	var logs bytes.Buffer
 	svc, s := testService(t)
 	svc.log = slog.New(slog.NewTextHandler(&logs, nil))
-	if err := s.Put("alice", subWithEndpoint(secretEndpoint)); err != nil {
+	if err := s.Put(subWithEndpoint(secretEndpoint)); err != nil {
 		t.Fatal(err)
 	}
 	raw := &url.Error{Op: "Post", URL: secretEndpoint, Err: context.DeadlineExceeded}
@@ -768,7 +886,7 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 	})
 
 	svc, store := testService(t)
-	if err := store.Put("alice", sub()); err != nil {
+	if err := store.Put(sub()); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Notify(context.Background(), "secret-agent", "done", "secret-pane"); err != nil {
@@ -802,7 +920,7 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 		t.Fatalf("focus code=%d", response.Code)
 	}
 
-	if err := store.Put("alice", sub()); err != nil {
+	if err := store.Put(sub()); err != nil {
 		t.Fatal(err)
 	}
 	svc.sender = fakeSender{status: http.StatusInternalServerError}
@@ -829,7 +947,7 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 	if err := svc.runEventsOnce(context.Background(), "test.sock"); err == nil {
 		t.Fatal("closed event stream returned nil")
 	}
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/push/subscription", nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/x"}`))
 	deleteReq.Header.Set("Remote-User", "alice")
 	svc.Handler().ServeHTTP(httptest.NewRecorder(), deleteReq)
 	body, _ := json.Marshal(subscriptionRequest{Endpoint: sub().Endpoint, Keys: sub().Keys})
