@@ -359,6 +359,16 @@ func TestTransitionFiltersSnapshotsAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestPaneCreatedReplayOnlyResnapshotsForNewPane(t *testing.T) {
+	states := map[string]string{"p1": "working"}
+	if paneCreationChangesSet(states, agentEvent{Event: "pane_created", Data: agentEventData{Pane: &agentEventPane{PaneID: "p1"}}}) {
+		t.Fatal("existing pane replay requested resnapshot")
+	}
+	if !paneCreationChangesSet(states, agentEvent{Event: "pane_created", Data: agentEventData{Pane: &agentEventPane{PaneID: "p2"}}}) {
+		t.Fatal("new pane did not request resnapshot")
+	}
+}
+
 func TestNotifyBroadcastReportsFailureEvenWhenLaterEndpointSucceeds(t *testing.T) {
 	svc, store := testService(t)
 	failed := subWithEndpoint("https://push.example/failed")
@@ -831,6 +841,7 @@ func TestRunEventsOnceUsesFreshSubscriptionConnection(t *testing.T) {
 		return <-connections, nil
 	}
 	subscription := make(chan string, 1)
+	newPaneRead := make(chan struct{})
 	go func() {
 		defer snapshotServer.Close()
 		scan := bufio.NewScanner(snapshotServer)
@@ -843,11 +854,25 @@ func TestRunEventsOnceUsesFreshSubscriptionConnection(t *testing.T) {
 		scan := bufio.NewScanner(eventsServer)
 		if scan.Scan() {
 			subscription <- scan.Text()
-			_, _ = io.WriteString(eventsServer, `{"event":"pane.created","data":{"pane":{"pane_id":"p2"}}}`+"\n")
+			if _, err := io.WriteString(eventsServer, `{"id":"push-events","result":{"type":"subscription_started"}}`+"\n"); err != nil {
+				return
+			}
+			if _, err := io.WriteString(eventsServer, `{"event":"pane_created","data":{"pane":{"pane_id":"p1"}}}`+"\n"); err != nil {
+				return
+			}
+			if _, err := io.WriteString(eventsServer, `{"event":"pane_created","data":{"pane":{"pane_id":"p2"}}}`+"\n"); err != nil {
+				return
+			}
+			close(newPaneRead)
 		}
 	}()
 	if err := svc.runEventsOnce(context.Background(), "unused"); !errors.Is(err, errPaneSetChanged) {
 		t.Fatalf("pane creation did not request resnapshot: %v", err)
+	}
+	select {
+	case <-newPaneRead:
+	case <-time.After(time.Second):
+		t.Fatal("existing pane replay triggered resnapshot before new pane event")
 	}
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("dial count=%d want 2", got)

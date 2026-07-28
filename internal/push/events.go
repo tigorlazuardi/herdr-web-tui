@@ -16,14 +16,21 @@ import (
 	"go.opentelemetry.io/otel/codes"
 )
 
+type agentEventPane struct {
+	PaneID string `json:"pane_id"`
+}
+
+type agentEventData struct {
+	PaneID       string          `json:"pane_id"`
+	AgentStatus  string          `json:"agent_status"`
+	Agent        *string         `json:"agent"`
+	DisplayAgent *string         `json:"display_agent"`
+	Pane         *agentEventPane `json:"pane"`
+}
+
 type agentEvent struct {
-	Event string `json:"event"`
-	Data  struct {
-		PaneID       string  `json:"pane_id"`
-		AgentStatus  string  `json:"agent_status"`
-		Agent        *string `json:"agent"`
-		DisplayAgent *string `json:"display_agent"`
-	} `json:"data"`
+	Event string         `json:"event"`
+	Data  agentEventData `json:"data"`
 }
 
 var errPaneSetChanged = errors.New("Herdr pane set changed")
@@ -65,6 +72,18 @@ type snapshotResponse struct {
 			} `json:"panes"`
 		} `json:"snapshot"`
 	} `json:"result"`
+}
+
+// paneCreationChangesSet ignores Herdr's initial replay of snapshot panes and detects genuinely new panes.
+func paneCreationChangesSet(states map[string]string, e agentEvent) bool {
+	if e.Event != "pane.created" && e.Event != "pane_created" {
+		return false
+	}
+	if e.Data.Pane == nil || !validPaneID(e.Data.Pane.PaneID) {
+		return false
+	}
+	_, exists := states[e.Data.Pane.PaneID]
+	return !exists
 }
 
 // EventTransition returns a notification only for real transitions into done or blocked.
@@ -168,9 +187,13 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 		if json.Unmarshal(scan.Bytes(), &e) != nil {
 			continue
 		}
-		// Herdr protocol 16 uses dotted subscription names; accept generic event spelling too.
+		// Herdr 0.7.4 replays existing pane_created records when a subscription starts.
+		// Reconnect only for a pane absent from the snapshot that seeded states.
 		if e.Event == "pane.created" || e.Event == "pane_created" {
-			return errPaneSetChanged
+			if paneCreationChangesSet(states, e) {
+				return errPaneSetChanged
+			}
+			continue
 		}
 		if e.Event != "pane.agent_status_changed" {
 			continue
