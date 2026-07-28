@@ -16,7 +16,9 @@ function applicationServerKey(value: string): Uint8Array<ArrayBuffer> {
 
 /** Converts bounded backend response text plus correlation header into visible operator feedback. */
 export async function responseError(response: Response, action: string): Promise<Error> {
-  const body = (await response.text()).trim().slice(0, 2048)
+  const raw = (await response.text()).trim()
+  const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? ''
+  const body = contentType.includes('text/html') ? 'upstream returned an HTML error' : raw.slice(0, 2048)
   const ref = response.headers.get('X-Request-Id') ?? response.headers.get('X-Correlation-Id')
   return new Error(`${action} (${response.status})${body ? `: ${body}` : ''}${ref ? ` [ref: ${ref}]` : ''}`)
 }

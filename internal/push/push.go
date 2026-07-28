@@ -634,8 +634,11 @@ type focusSnapshotResult struct {
 	} `json:"snapshot"`
 }
 
-type focusOKResult struct {
+type focusPaneResult struct {
 	Type string `json:"type"`
+	Pane *struct {
+		PaneID string `json:"pane_id"`
+	} `json:"pane"`
 }
 
 // readHerdrResponse decodes one bounded response and verifies correlation, protocol status, and required result.
@@ -718,12 +721,12 @@ func (s *Service) focusPane(ctx context.Context, paneID string) error {
 		if pane.PaneID != paneID {
 			continue
 		}
-		var focused focusOKResult
+		var focused focusPaneResult
 		if err := s.herdrRoundTrip(ctx, path, "pane focus", herdrRequest{ID: "focus-pane", Method: "pane.focus", Params: map[string]any{"pane_id": paneID}}, &focused); err != nil {
 			return err
 		}
-		if focused.Type != "ok" {
-			return errors.Wrap(errHerdrProtocol, "unexpected focus result type")
+		if focused.Type != "pane_info" || focused.Pane == nil || focused.Pane.PaneID != paneID {
+			return errors.Wrap(errHerdrProtocol, "unexpected focus result shape")
 		}
 		return nil
 	}

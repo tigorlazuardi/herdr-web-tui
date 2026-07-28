@@ -572,7 +572,7 @@ func TestFocusAPIValidatesAuthenticatesAndUsesVerifiedSocketRequest(t *testing.T
 		}
 	}
 	go serve(snapshotServer, `{"id":"focus-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"w1:p2","terminal_id":"t1","workspace_id":"w1","tab_id":"tab1","focused":false,"agent_status":"idle","revision":1}],"layouts":[],"agents":[]}}}`)
-	go serve(focusServer, `{"id":"focus-pane","result":{"type":"ok"}}`)
+	go serve(focusServer, `{"id":"focus-pane","result":{"type":"pane_info","pane":{"pane_id":"w1:p2"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/push/focus", strings.NewReader(`{"pane_id":"w1:p2"}`))
 	req.Header.Set("Remote-User", "alice")
 	req.Header.Set("Content-Type", "application/json")
@@ -644,7 +644,7 @@ func TestFocusPane_FreshConnection_FocusSucceeds(t *testing.T) {
 		var request herdrRequest
 		if json.NewDecoder(focusServer).Decode(&request) == nil {
 			focusRequest <- request
-			_, _ = io.WriteString(focusServer, `{"id":"focus-pane","result":{"type":"ok"}}`+"\n")
+			_, _ = io.WriteString(focusServer, `{"id":"focus-pane","result":{"type":"pane_info","pane":{"pane_id":"w1:p2"}}}`+"\n")
 		}
 	}()
 
@@ -733,13 +733,15 @@ func TestFocusPaneRejectsInvalidProtocolFrames(t *testing.T) {
 		"snapshot shape missing":            {snapshot: `{"id":"focus-snapshot","result":{"type":"session_snapshot"}}`},
 		"snapshot panes missing":            {snapshot: `{"id":"focus-snapshot","result":{"type":"session_snapshot","snapshot":{}}}`},
 		"snapshot EOF":                      {},
-		"focus wrong ID":                    {snapshot: validSnapshot, focus: `{"id":"other","result":{"type":"ok"}}`},
+		"focus wrong ID":                    {snapshot: validSnapshot, focus: `{"id":"other","result":{"type":"pane_info","pane":{"pane_id":"w1:p2"}}}`},
 		"focus error":                       {snapshot: validSnapshot, focus: `{"id":"focus-pane","error":{"code":-1}}`},
 		"focus missing result":              {snapshot: validSnapshot, focus: `{"id":"focus-pane"}`},
 		"focus discriminator missing":       {snapshot: validSnapshot, focus: `{"id":"focus-pane","result":{}}`},
 		"focus discriminator wrong":         {snapshot: validSnapshot, focus: `{"id":"focus-pane","result":{"type":"session_snapshot"}}`},
 		"focus result non-object":           {snapshot: validSnapshot, focus: `{"id":"focus-pane","result":42}`},
 		"focus discriminator wrong type":    {snapshot: validSnapshot, focus: `{"id":"focus-pane","result":{"type":16}}`},
+		"focus pane missing":                {snapshot: validSnapshot, focus: `{"id":"focus-pane","result":{"type":"pane_info"}}`},
+		"focus pane mismatched":             {snapshot: validSnapshot, focus: `{"id":"focus-pane","result":{"type":"pane_info","pane":{"pane_id":"w1:p3"}}}`},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

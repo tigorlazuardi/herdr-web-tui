@@ -25,6 +25,13 @@ describe('push worker registration', () => {
 })
 
 describe('push lifecycle', () => {
+  it('summarizes HTML gateway errors instead of exposing markup', async () => {
+    for (const body of ['<!DOCTYPE html><html><body>proxy details</body></html>', '']) {
+      const response = new Response(body, { status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Request-Id': 'req-html' } })
+      await expect(responseError(response, 'Focusing notification pane failed')).resolves.toEqual(new Error('Focusing notification pane failed (502): upstream returned an HTML error [ref: req-html]'))
+    }
+  })
+
   it('subscribes and saves native subscription', async () => {
     const subscription = { unsubscribe: vi.fn(), toJSON: () => ({ endpoint: 'https://push.example/x' }) }
     const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue(null), subscribe: vi.fn().mockResolvedValue(subscription) } } as unknown as ServiceWorkerRegistration
