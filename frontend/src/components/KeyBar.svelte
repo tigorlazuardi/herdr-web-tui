@@ -58,7 +58,7 @@
     bridge.sendInput(chip.kind === 'text' ? chip.key : sticky.consume(chip.key))
   }
 
-  // ponytail: reorder only, not drag-to-pane. Add drop-zone actions once reorder proves useful.
+  // ponytail: horizontal drag scrolls rail; reorder starts only after long-press.
   function startDrag(event: PointerEvent, chip: AccessoryChip) {
     pointerStart = { id: chip.id, x: event.clientX, y: event.clientY }
   }
@@ -67,12 +67,11 @@
     if (!pointerStart) return
     const dx = Math.abs(event.clientX - pointerStart.x)
     const dy = Math.abs(event.clientY - pointerStart.y)
-    if (dx + dy < 8) return
+    if (dy > dx || dx < 8) return
     if (pressTimer) {
       clearTimeout(pressTimer)
       pressTimer = null
     }
-    draggingId = pointerStart.id
   }
 
   function endDrag(event: PointerEvent) {
@@ -99,14 +98,16 @@
   let longPressFired = false
 
   function startPress(event: PointerEvent, chip: AccessoryChip) {
-    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
     startDrag(event, chip)
     longPressFired = false
     const alt = ALTERNATES[chip.key]
-    if (!alt) return
     pressTimer = setTimeout(() => {
       longPressFired = true
-      bridge.sendInput(sticky.consume(alt))
+      if (alt) {
+        bridge.sendInput(sticky.consume(alt))
+      } else {
+        draggingId = chip.id
+      }
     }, LONG_PRESS_MS)
   }
 
@@ -193,7 +194,7 @@
     padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
     background: #1c1917;
     border-top: 1px solid #292524;
-    touch-action: none;
+    touch-action: pan-x;
   }
 
   .row {
@@ -215,7 +216,7 @@
     font: 600 0.8rem/1 system-ui, sans-serif;
     white-space: nowrap;
     user-select: none;
-    touch-action: none;
+    touch-action: pan-x;
   }
 
   .row button:active {
