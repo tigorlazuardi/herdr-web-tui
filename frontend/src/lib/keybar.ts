@@ -179,67 +179,39 @@ export interface AccessoryChip {
   label: string
   key: string
   kind: 'key' | 'modifier' | 'text'
-  row: 'primary' | 'extra'
 }
 
 export const ACCESSORY_CHIPS: readonly AccessoryChip[] = [
-  { id: 'esc', label: 'Esc', key: 'Escape', kind: 'key', row: 'primary' },
-  { id: 'ctrl', label: 'Ctrl', key: 'ctrl', kind: 'modifier', row: 'primary' },
-  { id: 'alt', label: 'Alt', key: 'alt', kind: 'modifier', row: 'primary' },
-  { id: 'tab', label: 'Tab', key: 'Tab', kind: 'key', row: 'primary' },
-  { id: 'fn', label: 'Fn', key: 'fn', kind: 'modifier', row: 'primary' },
-  { id: 'prefix', label: '^B', key: '\x02', kind: 'text', row: 'primary' },
-  { id: 'left', label: '←', key: 'ArrowLeft', kind: 'key', row: 'primary' },
-  { id: 'down', label: '↓', key: 'ArrowDown', kind: 'key', row: 'primary' },
-  { id: 'up', label: '↑', key: 'ArrowUp', kind: 'key', row: 'primary' },
-  { id: 'right', label: '→', key: 'ArrowRight', kind: 'key', row: 'primary' },
-  { id: 'home', label: 'Home', key: 'Home', kind: 'key', row: 'extra' },
-  { id: 'end', label: 'End', key: 'End', kind: 'key', row: 'extra' },
-  { id: 'pgup', label: 'PgUp', key: 'PageUp', kind: 'key', row: 'extra' },
-  { id: 'pgdn', label: 'PgDn', key: 'PageDown', kind: 'key', row: 'extra' },
+  { id: 'esc', label: 'Esc', key: 'Escape', kind: 'key' },
+  { id: 'left', label: '←', key: 'ArrowLeft', kind: 'key' },
+  { id: 'down', label: '↓', key: 'ArrowDown', kind: 'key' },
+  { id: 'up', label: '↑', key: 'ArrowUp', kind: 'key' },
+  { id: 'right', label: '→', key: 'ArrowRight', kind: 'key' },
+  { id: 'enter', label: 'Enter', key: '\r', kind: 'text' },
+  { id: 'ctrl-c', label: 'Ctrl+C', key: '\x03', kind: 'text' },
+  { id: 'ctrl-d', label: 'Ctrl+D', key: '\x04', kind: 'text' },
+  { id: 'prefix', label: 'Ctrl+B', key: '\x02', kind: 'text' },
+  { id: 'tab', label: 'Tab', key: 'Tab', kind: 'key' },
+  { id: 'ctrl', label: 'Ctrl', key: 'ctrl', kind: 'modifier' },
+  { id: 'alt', label: 'Alt', key: 'alt', kind: 'modifier' },
+  { id: 'home', label: 'Home', key: 'Home', kind: 'key' },
+  { id: 'end', label: 'End', key: 'End', kind: 'key' },
+  { id: 'pgup', label: 'PgUp', key: 'PageUp', kind: 'key' },
+  { id: 'pgdn', label: 'PgDn', key: 'PageDown', kind: 'key' },
+  { id: 'fn', label: 'Fn', key: 'fn', kind: 'modifier' },
   ...['/', '-', '|', '~', ':'].map((key) => ({
     id: `char-${key}`,
     label: key,
     key,
     kind: 'key' as const,
-    row: 'extra' as const,
   })),
   ...Array.from({ length: 12 }, (_, i) => ({
     id: `f${i + 1}`,
     label: `F${i + 1}`,
     key: `F${i + 1}`,
     kind: 'key' as const,
-    row: 'extra' as const,
   })),
 ]
-
-const CHIP_IDS = new Set(ACCESSORY_CHIPS.map((chip) => chip.id))
-
-export function mergeAccessoryOrder(stored: readonly string[]): string[] {
-  const seen = new Set<string>()
-  const validStored = stored.filter((id) => {
-    if (!CHIP_IDS.has(id) || seen.has(id)) return false
-    seen.add(id)
-    return true
-  })
-  return [
-    ...validStored,
-    ...ACCESSORY_CHIPS.map((chip) => chip.id).filter((id) => !seen.has(id)),
-  ]
-}
-
-export function moveAccessoryChip(
-  order: readonly string[],
-  draggedId: string,
-  targetId: string,
-): string[] {
-  if (draggedId === targetId) return [...order]
-  const next = order.filter((id) => id !== draggedId)
-  const targetIndex = next.indexOf(targetId)
-  if (targetIndex === -1 || order.indexOf(draggedId) === -1) return [...order]
-  next.splice(targetIndex, 0, draggedId)
-  return next
-}
 
 /**
  * Owns the sticky-modifier latch. This is a plain class, not a Svelte
