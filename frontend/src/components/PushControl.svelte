@@ -1,11 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { consumePaneFocus, initialPushFeedback, registerPushWorker, supportsPush, togglePush, type PaneFocusFeedback, type PushState } from '../lib/push'
+  import { consumePaneFocus, initialPushFeedback, isTransientFeedback, registerPushWorker, supportsPush, togglePush, type PaneFocusFeedback, type PushState } from '../lib/push'
 
   let registration = $state<ServiceWorkerRegistration | null>(null)
   let pushState = $state<PushState>('idle')
   let message = $state('')
   let paneFocus = $state<PaneFocusFeedback | null>(null)
+
+  $effect(() => {
+    const clearMessage = message && isTransientFeedback(pushState)
+    const clearPaneFocus = paneFocus && isTransientFeedback(paneFocus.state)
+    if (!clearMessage && !clearPaneFocus) return
+    const timeout = setTimeout(() => {
+      if (clearMessage) message = ''
+      if (clearPaneFocus) paneFocus = null
+    }, 4000)
+    return () => clearTimeout(timeout)
+  })
 
   /** Mount owns worker registration plus initial server state; every failure becomes visible. */
   onMount(() => {

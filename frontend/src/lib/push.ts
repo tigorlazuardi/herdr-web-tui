@@ -2,6 +2,8 @@ export type PushState = 'unsupported' | 'idle' | 'pending' | 'enabled' | 'denied
 export type PushFeedback = { state: PushState; message: string }
 export type PaneFocusFeedback = { state: 'pending' | 'success' | 'error'; message: string }
 
+export const isTransientFeedback = (state: PushState | PaneFocusFeedback['state']): boolean => state === 'idle' || state === 'enabled' || state === 'success'
+
 const validPaneId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9:_-]{1,128}$/.test(value)
 
 export function supportsPush(): boolean {

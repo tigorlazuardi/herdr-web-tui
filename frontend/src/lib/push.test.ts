@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { consumePaneFocus, disablePush, enablePush, focusPane, initialPushFeedback, pushConfig, registerPushWorker, responseError, togglePush } from './push'
+import { consumePaneFocus, disablePush, enablePush, focusPane, initialPushFeedback, isTransientFeedback, pushConfig, registerPushWorker, responseError, togglePush } from './push'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -25,6 +25,11 @@ describe('push worker registration', () => {
 })
 
 describe('push lifecycle', () => {
+  it('dismisses only completed non-error feedback', () => {
+    expect((['idle', 'enabled', 'success'] as const).every(isTransientFeedback)).toBe(true)
+    expect((['pending', 'unsupported', 'denied', 'error'] as const).some(isTransientFeedback)).toBe(false)
+  })
+
   it('summarizes HTML gateway errors instead of exposing markup', async () => {
     for (const body of ['<!DOCTYPE html><html><body>proxy details</body></html>', '']) {
       const response = new Response(body, { status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Request-Id': 'req-html' } })
