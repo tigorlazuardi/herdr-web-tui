@@ -85,6 +85,7 @@ Main runtime settings:
 | `HERDR_SOCKET_PATH` | unset | Required for raw Herdr event/focus socket features |
 | `TMP_PREFIX` / `-tmp-prefix` | `herdr-web-tui` | `/tmp/<prefix>-<uid>` artifact directory |
 | `LOG_FORMAT` / `-log-format` | TTY auto-detect | `json` or `text` |
+| `SERVER_NAME` | unset | Per-server PWA label, e.g. `sg-prod-1` |
 | `WEB_PUSH_STORE_PATH` | `./web-push-subscription.json` | Push endpoint store |
 | `VAPID_PUBLIC_KEY` | unset | Enables Web Push with matching private config |
 | `VAPID_PRIVATE_KEY` | unset | Secret; never expose to browser/logs |
@@ -93,6 +94,16 @@ Main runtime settings:
 
 All three VAPID values must be set together. Push registrations contain secrets;
 protect store as mode `0600`. See operator guide for migration and rollback.
+
+For distinct installed PWA names across servers, set a stable label per host:
+
+```nix
+services.herdr-web-tui.environment.SERVER_NAME = config.networking.hostName;
+```
+
+Manifest name combines server label with trusted gateway `Remote-User`, while
+`short_name` stays server-focused for launcher space. Existing installs may need
+reinstallation before launcher text updates.
 
 ## Security boundary
 

@@ -158,7 +158,8 @@ func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
 	}
 }
 
-func TestManifest_IsUniquePerAuthenticatedUser(t *testing.T) {
+func TestManifest_IsUniquePerServerAndAuthenticatedUser(t *testing.T) {
+	t.Setenv("SERVER_NAME", "")
 	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 	get := func(user string) manifest {
 		t.Helper()
@@ -189,7 +190,7 @@ func TestManifest_IsUniquePerAuthenticatedUser(t *testing.T) {
 	fallback := get("")
 	alice := get("alice")
 	bob := get("bob")
-	if fallback.ID != "" || fallback.Name != "Herdr Web TUI" {
+	if fallback.ID != "" || fallback.Name != "Herdr Web TUI" || fallback.ShortName != "Herdr" {
 		t.Fatalf("unexpected unauthenticated fallback: %+v", fallback)
 	}
 	if alice.ID == "" || alice.ID == bob.ID {
@@ -197,6 +198,13 @@ func TestManifest_IsUniquePerAuthenticatedUser(t *testing.T) {
 	}
 	if alice.Name != "Herdr — alice" {
 		t.Fatalf("unexpected name %q", alice.Name)
+	}
+
+	t.Setenv("SERVER_NAME", "sg-prod-1")
+	handler = New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+	serverAlice := get("alice")
+	if serverAlice.Name != "Herdr — sg-prod-1 — alice" || serverAlice.ShortName != "Herdr sg-prod-1" || serverAlice.ID == alice.ID {
+		t.Fatalf("unexpected server manifest: %+v", serverAlice)
 	}
 	if alice.Display != "standalone" || len(alice.Icons) != 2 || alice.Icons[0].Src != "/icon-192.png" || alice.Icons[1].Src != "/icon-512.png" {
 		t.Fatalf("unexpected install metadata: %+v", alice)

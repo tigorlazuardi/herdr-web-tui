@@ -75,6 +75,7 @@ func setCacheHeaders(w http.ResponseWriter, urlPath string) {
 type manifest struct {
 	ID              string         `json:"id,omitempty"`
 	Name            string         `json:"name"`
+	ShortName       string         `json:"short_name"`
 	Description     string         `json:"description"`
 	StartURL        string         `json:"start_url"`
 	Scope           string         `json:"scope"`
@@ -91,16 +92,29 @@ type manifestIcon struct {
 	Purpose string `json:"purpose"`
 }
 
-func newManifestHandler() http.Handler {
+func newManifestHandler(serverName string) http.Handler {
+	serverName = strings.TrimSpace(serverName)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := "Herdr Web TUI"
 		user := strings.TrimSpace(r.Header.Get("Remote-User"))
+		labels := []string{"Herdr"}
+		if serverName != "" {
+			labels = append(labels, serverName)
+		}
 		if user != "" {
-			name = "Herdr — " + user
+			labels = append(labels, user)
+		}
+		name := strings.Join(labels, " — ")
+		if serverName == "" && user == "" {
+			name = "Herdr Web TUI"
+		}
+		shortName := "Herdr"
+		if serverName != "" {
+			shortName += " " + serverName
 		}
 
 		m := manifest{
 			Name:            name,
+			ShortName:       shortName,
 			Description:     "Live Herdr TUI in the browser",
 			StartURL:        "/",
 			Scope:           "/",
@@ -112,8 +126,8 @@ func newManifestHandler() http.Handler {
 				{Src: "/icon-512.png", Sizes: "512x512", Type: "image/png", Purpose: "any"},
 			},
 		}
-		if user != "" {
-			m.ID = fmt.Sprintf("/pwa/%x", sha256.Sum256([]byte(user)))
+		if serverName != "" || user != "" {
+			m.ID = fmt.Sprintf("/pwa/%x", sha256.Sum256([]byte(serverName+"\x00"+user)))
 		}
 
 		w.Header().Set("Cache-Control", "private, no-store")

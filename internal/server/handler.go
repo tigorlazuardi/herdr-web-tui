@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrclient"
 	"github.com/tigorlazuardi/herdr-web-tui/internal/push"
@@ -28,7 +29,7 @@ func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, staging
 	mux.Handle("/send", newSendHandler(herdr, stagingDir, logger))
 	mux.Handle("/clientlog", newClientlogHandler(logger))
 	mux.Handle("/ws", newPTYHandler(logger))
-	mux.Handle("/manifest.webmanifest", newManifestHandler())
+	mux.Handle("/manifest.webmanifest", newManifestHandler(os.Getenv("SERVER_NAME")))
 	mux.Handle("/", newStaticHandler(fsys))
 
 	var h http.Handler = mux
