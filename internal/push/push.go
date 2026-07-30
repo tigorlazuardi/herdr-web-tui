@@ -617,7 +617,12 @@ type focusSnapshotResult struct {
 }
 
 func validSessionSnapshot(s focusSnapshotResult) bool {
-	return s.Type == "session_snapshot" && s.Snapshot != nil && s.Snapshot.Version != nil && s.Snapshot.Protocol != nil && *s.Snapshot.Protocol == 16 && s.Snapshot.Workspaces != nil && s.Snapshot.Tabs != nil && s.Snapshot.Panes != nil && s.Snapshot.Layouts != nil && s.Snapshot.Agents != nil
+	if s.Snapshot == nil || s.Snapshot.Protocol == nil {
+		return false
+	}
+	// ponytail: accept only schema-reviewed Herdr protocols; add future versions after compatibility review.
+	protocolSupported := *s.Snapshot.Protocol == 16 || *s.Snapshot.Protocol == 17
+	return s.Type == "session_snapshot" && s.Snapshot.Version != nil && protocolSupported && s.Snapshot.Workspaces != nil && s.Snapshot.Tabs != nil && s.Snapshot.Panes != nil && s.Snapshot.Layouts != nil && s.Snapshot.Agents != nil
 }
 
 type focusPaneResult struct {
