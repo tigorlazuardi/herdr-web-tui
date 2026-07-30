@@ -94,22 +94,12 @@ type manifestIcon struct {
 
 func newManifestHandler(serverName string) http.Handler {
 	serverName = strings.TrimSpace(serverName)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := strings.TrimSpace(r.Header.Get("Remote-User"))
-		labels := []string{"Herdr"}
-		if serverName != "" {
-			labels = append(labels, serverName)
-		}
-		if user != "" {
-			labels = append(labels, user)
-		}
-		name := strings.Join(labels, " — ")
-		if serverName == "" && user == "" {
-			name = "Herdr Web TUI"
-		}
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		name := "Herdr Web TUI"
 		shortName := "Herdr"
 		if serverName != "" {
-			shortName += " " + serverName
+			name = serverName
+			shortName = serverName
 		}
 
 		m := manifest{
@@ -126,13 +116,12 @@ func newManifestHandler(serverName string) http.Handler {
 				{Src: "/icon-512.png", Sizes: "512x512", Type: "image/png", Purpose: "any"},
 			},
 		}
-		if serverName != "" || user != "" {
-			m.ID = fmt.Sprintf("/pwa/%x", sha256.Sum256([]byte(serverName+"\x00"+user)))
+		if serverName != "" {
+			m.ID = fmt.Sprintf("/pwa/%x", sha256.Sum256([]byte(serverName)))
 		}
 
 		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Set("Content-Type", "application/manifest+json")
-		w.Header().Set("Vary", "Remote-User")
 		_ = json.NewEncoder(w).Encode(m)
 	})
 }

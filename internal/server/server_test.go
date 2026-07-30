@@ -158,11 +158,11 @@ func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
 	}
 }
 
-func TestManifest_IsUniquePerServerAndAuthenticatedUser(t *testing.T) {
-	t.Setenv("SERVER_NAME", "")
-	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
-	get := func(user string) manifest {
+func TestManifest_UsesServerNameAndIgnoresRemoteUser(t *testing.T) {
+	get := func(serverName, user string) manifest {
 		t.Helper()
+		t.Setenv("SERVER_NAME", serverName)
+		handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 		req := httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil)
 		req.Header.Set("Remote-User", user)
 		rec := httptest.NewRecorder()
@@ -177,7 +177,7 @@ func TestManifest_IsUniquePerServerAndAuthenticatedUser(t *testing.T) {
 		if got := rec.Header().Get("Cache-Control"); got != "private, no-store" {
 			t.Fatalf("unexpected cache control %q", got)
 		}
-		if got := rec.Header().Get("Vary"); got != "Remote-User" {
+		if got := rec.Header().Get("Vary"); got != "" {
 			t.Fatalf("unexpected vary header %q", got)
 		}
 		var m manifest
@@ -187,27 +187,18 @@ func TestManifest_IsUniquePerServerAndAuthenticatedUser(t *testing.T) {
 		return m
 	}
 
-	fallback := get("")
-	alice := get("alice")
-	bob := get("bob")
+	fallback := get("", "$tinyauth_remote_user")
 	if fallback.ID != "" || fallback.Name != "Herdr Web TUI" || fallback.ShortName != "Herdr" {
-		t.Fatalf("unexpected unauthenticated fallback: %+v", fallback)
-	}
-	if alice.ID == "" || alice.ID == bob.ID {
-		t.Fatalf("expected unique non-empty ids, got %q and %q", alice.ID, bob.ID)
-	}
-	if alice.Name != "Herdr — alice" {
-		t.Fatalf("unexpected name %q", alice.Name)
+		t.Fatalf("unexpected fallback: %+v", fallback)
 	}
 
-	t.Setenv("SERVER_NAME", "sg-prod-1")
-	handler = New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
-	serverAlice := get("alice")
-	if serverAlice.Name != "Herdr — sg-prod-1 — alice" || serverAlice.ShortName != "Herdr sg-prod-1" || serverAlice.ID == alice.ID {
-		t.Fatalf("unexpected server manifest: %+v", serverAlice)
+	server := get("sg-prod-1", "$tinyauth_remote_user")
+	serverOtherUser := get("sg-prod-1", "alice")
+	if server.Name != "sg-prod-1" || server.ShortName != "sg-prod-1" || server.ID == "" || server.ID != serverOtherUser.ID || server.Name != serverOtherUser.Name {
+		t.Fatalf("unexpected server manifest: %+v", server)
 	}
-	if alice.Display != "standalone" || len(alice.Icons) != 2 || alice.Icons[0].Src != "/icon-192.png" || alice.Icons[1].Src != "/icon-512.png" {
-		t.Fatalf("unexpected install metadata: %+v", alice)
+	if server.Display != "standalone" || len(server.Icons) != 2 || server.Icons[0].Src != "/icon-192.png" || server.Icons[1].Src != "/icon-512.png" {
+		t.Fatalf("unexpected install metadata: %+v", server)
 	}
 }
 
