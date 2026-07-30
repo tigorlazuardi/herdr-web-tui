@@ -1,0 +1,53 @@
+---
+title: Herdr protocol 17 rejected valid event snapshot
+description: Web Push event subscription fails "event snapshot missing required shape" because Herdr 0.7.5 reports protocol 17 while client accepts only protocol 16.
+date: 2026-07-31
+severity: high
+tags: [tech/herdr, kind/breaking-change, area/push]
+sidebar:
+  label: 2026-07-31 Herdr protocol snapshot
+  order: -1785432838706
+---
+
+## Symptom
+
+```txt
+Herdr event subscription failed: event snapshot missing required shape: invalid Herdr protocol response
+```
+
+## Context
+
+Herdr Web TUI `899e3a7` ran against Herdr `0.7.5`. Web Push configuration remained healthy, but event subscription retried every second and could not observe agent state transitions.
+
+Live `session.snapshot` retained the expected `session_snapshot` envelope and required collections while changing `protocol` from 16 to 17.
+
+## Offending code
+
+```go title="internal/push/push.go:619" {1}
+*s.Snapshot.Protocol == 16 // rejected Herdr 0.7.5 protocol 17
+```
+
+## Root cause
+
+Snapshot validation coupled structural compatibility to one exact Herdr protocol number. Herdr `0.7.5` advanced the protocol to 17 without changing fields consumed by Push, so a structurally compatible response failed before subscription setup.
+
+## Fix
+
+Commit `f60aafe` explicitly allows schema-reviewed protocols 16 and 17. Unknown future protocols remain rejected until their schema is reviewed.
+
+```diff
+- *s.Snapshot.Protocol == 16
++ *s.Snapshot.Protocol == 16 || *s.Snapshot.Protocol == 17
+```
+
+Full-path regression coverage now seeds `runEventsOnce` with a protocol 17 snapshot and exercises subscription plus resnapshot behavior.
+
+## Lesson
+
+Validate required shape separately from version compatibility. Keep a narrow allow-list for reviewed protocol versions; add each version only after comparing fields and event contracts consumed by this service.
+
+## Recurrence log
+
+| Date | Where | Trace ID | Notes |
+|---|---|---|---|
+| 2026-07-31 | office instances | — | First hit after Herdr 0.7.5 protocol 17 deployment |

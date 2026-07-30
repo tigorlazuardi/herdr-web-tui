@@ -24,12 +24,20 @@ export default defineConfig({
       },
       plugins: [
         starlightLlmsTxt({
-          customSets: [],
+          demote: ['reports/**'],
+          customSets: [
+            {
+              label: 'Report: Herdr protocol snapshot (2026-07)',
+              description: 'Web Push event subscription rejects Herdr 0.7.5 protocol 17 snapshots.',
+              paths: ['reports/2026-07-herdr-protocol-snapshot'],
+            },
+          ],
         }),
       ],
       sidebar: [
         { label: 'Guides', items: [{ autogenerate: { directory: 'guides' } }] },
         { label: 'Reference', items: [{ autogenerate: { directory: 'reference' } }] },
+        { label: 'Reports', collapsed: true, items: [{ autogenerate: { directory: 'reports' } }] },
       ],
     }),
   ],

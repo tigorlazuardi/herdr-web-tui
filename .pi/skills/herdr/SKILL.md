@@ -35,6 +35,22 @@ Do not invent keybindings, config keys, or CLI flags — verify against docs.
 The CLI and socket API share the same methods. CLI is the easy entry; use raw
 socket for custom tools and event subscribers.
 
+### Protocol compatibility
+
+Herdr protocol versions can advance while consumed shapes remain compatible. For
+raw socket consumer changes or Herdr upgrades:
+
+1. Read `herdr api schema --json` (`.protocol`) and capture `herdr api snapshot`.
+2. Compare every consumed method, response, and event schema.
+3. Validate required JSON shape separately. Allow only reviewed protocol
+   versions—not one stale equality check or an open-ended range.
+4. Add a full-path fixture using the real envelope for each accepted version.
+
+Done means accepted-version fixtures pass and an unknown version fails. After an
+upgrade, `event snapshot missing required shape` commonly means a stale protocol
+allow-list; Herdr 0.7.5 advanced from protocol 16 to 17 without changing Push's
+consumed fields.
+
 ### Panes — read & send input (core for automation)
 
 ```
