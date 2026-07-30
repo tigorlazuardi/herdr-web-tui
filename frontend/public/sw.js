@@ -9,7 +9,11 @@ self.addEventListener('push', (event) => {
     await self.registration.showNotification(data.title, {
       body: data.body,
       data: { pane_id: data.pane_id },
-      tag: `herdr-agent-${typeof data.state === 'string' ? data.state : 'update'}`,
+      tag: `herdr-agent-${data.pane_id}-${typeof data.state === 'string' ? data.state : 'update'}`,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: [200, 100, 200],
     })
   })())
 })

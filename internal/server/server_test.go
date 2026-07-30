@@ -160,10 +160,11 @@ func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
 	}
 }
 
-func TestManifestUsesServerName(t *testing.T) {
-	get := func(serverName, requestPath string) manifest {
+func TestManifestUsesConfiguredNames(t *testing.T) {
+	get := func(serverName, appName, requestPath string) manifest {
 		t.Helper()
 		t.Setenv("SERVER_NAME", serverName)
+		t.Setenv("APP_NAME", appName)
 		handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
 		req := httptest.NewRequest(http.MethodGet, requestPath, nil)
 		rec := httptest.NewRecorder()
@@ -188,16 +189,20 @@ func TestManifestUsesServerName(t *testing.T) {
 		return m
 	}
 
-	fallback := get("", "/manifest.webmanifest")
+	fallback := get("", "", "/manifest.webmanifest")
 	if fallback.ID != "" || fallback.Name != "Herdr Web TUI" || fallback.ShortName != "Herdr" {
 		t.Fatalf("unexpected fallback: %+v", fallback)
 	}
 
-	server := get(" sg-prod-1 ", "/manifest.webmanifest")
-	legacyPath := get(" sg-prod-1 ", "/manifest.json")
+	server := get(" sg-prod-1 ", "", "/manifest.webmanifest")
+	custom := get(" sg-prod-1 ", " Production Shell ", "/manifest.webmanifest")
+	legacyPath := get(" sg-prod-1 ", " Production Shell ", "/manifest.json")
 	expectedID := fmt.Sprintf("/pwa/%x", sha256.Sum256([]byte(" sg-prod-1 ")))
-	if server.Name != " sg-prod-1 " || server.ShortName != " sg-prod-1 " || server.ID != expectedID || legacyPath.Name != server.Name || legacyPath.ID != server.ID {
-		t.Fatalf("unexpected server manifest: %+v", server)
+	if server.Name != " sg-prod-1 " || server.ShortName != " sg-prod-1 " || server.ID != expectedID {
+		t.Fatalf("unexpected default server manifest: %+v", server)
+	}
+	if custom.Name != " Production Shell " || custom.ShortName != " Production Shell " || custom.ID != expectedID || legacyPath.Name != custom.Name || legacyPath.ID != custom.ID {
+		t.Fatalf("unexpected custom app manifest: %+v", custom)
 	}
 	if server.Display != "standalone" || len(server.Icons) != 2 || server.Icons[0].Src != "/icon-192.png" || server.Icons[1].Src != "/icon-512.png" {
 		t.Fatalf("unexpected install metadata: %+v", server)

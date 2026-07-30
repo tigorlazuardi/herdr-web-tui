@@ -85,7 +85,8 @@ Main runtime settings:
 | `HERDR_SOCKET_PATH` | unset | Required for raw Herdr event/focus socket features |
 | `TMP_PREFIX` / `-tmp-prefix` | `herdr-web-tui` | `/tmp/<prefix>-<uid>` artifact directory |
 | `LOG_FORMAT` / `-log-format` | TTY auto-detect | `json` or `text` |
-| `SERVER_NAME` | unset | Exact PWA install name, e.g. `sg-prod-1` |
+| `SERVER_NAME` | unset | Stable per-server PWA identity and default app name |
+| `APP_NAME` | `SERVER_NAME` | Exact manifest and browser title shown for this instance |
 | `WEB_PUSH_STORE_PATH` | `./web-push-subscription.json` | Push endpoint store |
 | `VAPID_PUBLIC_KEY` | unset | Enables Web Push with matching private config |
 | `VAPID_PRIVATE_KEY` | unset | Secret; never expose to browser/logs |
@@ -95,15 +96,18 @@ Main runtime settings:
 All three VAPID values must be set together. Push registrations contain secrets;
 protect store as mode `0600`. See operator guide for migration and rollback.
 
-For distinct installed PWA names across servers, set a stable label per host:
+Give each server stable identity, then optionally choose independent display name:
 
 ```nix
-services.herdr-web-tui.environment.SERVER_NAME = config.networking.hostName;
+services.herdr-web-tui.environment = {
+  SERVER_NAME = config.networking.hostName;
+  APP_NAME = "Home Lab Shell";
+};
 ```
 
-Manifest `name`, `short_name`, and identity use `SERVER_NAME` exactly. Include
-any desired `Herdr` prefix in configured value. Existing installs may need
-reinstallation before launcher text updates.
+Manifest identity derives from `SERVER_NAME`. Manifest `name`, `short_name`, and
+browser title use `APP_NAME` exactly, falling back to `SERVER_NAME`. Existing
+installs may need reinstallation before launcher text updates.
 
 ## Security boundary
 

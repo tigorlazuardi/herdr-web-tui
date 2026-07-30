@@ -35,6 +35,14 @@
   })
 
   onMount(() => {
+    // ponytail: manifest is existing server-owned app config; reuse it instead of adding another endpoint.
+    void fetch('/manifest.webmanifest')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((manifest: { name?: unknown } | null) => {
+        if (typeof manifest?.name === 'string' && manifest.name) document.title = manifest.name
+      })
+      .catch(() => {})
+
     const unsubscribe = bridge.onStateChange((s) => (connectionState = s))
     const releaseWakeLock = holdPWAScreenAwake((unavailable) => (wakeLockUnavailable = unavailable))
     bridge.attach(container)

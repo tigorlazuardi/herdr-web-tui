@@ -92,13 +92,16 @@ type manifestIcon struct {
 	Purpose string `json:"purpose"`
 }
 
-func newManifestHandler(serverName string) http.Handler {
+func newManifestHandler(serverName, appName string) http.Handler {
+	if appName == "" {
+		appName = serverName
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		name := "Herdr Web TUI"
 		shortName := "Herdr"
-		if serverName != "" {
-			name = serverName
-			shortName = serverName
+		if appName != "" {
+			name = appName
+			shortName = appName
 		}
 
 		m := manifest{

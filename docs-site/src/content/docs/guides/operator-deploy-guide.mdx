@@ -135,25 +135,26 @@ server {
 }
 ```
 
-Run backend on loopback (`--addr 127.0.0.1:8080`) or an equivalent private socket/firewall rule. Never expose backend listener directly: every request reaching it is trusted. Validate gateway access and configured single-server PWA identity before enabling Push. `/manifest.webmanifest` derives bounded `id` and `name` only from `SERVER_NAME`; unauthenticated access remains a gateway concern.
+Run backend on loopback (`--addr 127.0.0.1:8080`) or an equivalent private socket/firewall rule. Never expose backend listener directly: every request reaching it is trusted. Validate gateway access and configured single-server PWA identity before enabling Push. `/manifest.webmanifest` derives bounded `id` only from `SERVER_NAME`; `name` uses `APP_NAME`, falling back to `SERVER_NAME`. Unauthenticated access remains a gateway concern.
 
 ```sh
 set -eu
 BASE=https://your-domain
 OPERATOR=operator
 SERVER_NAME=sg-prod-1
+APP_NAME="Production Shell"
 
 [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-filesize 16384 "$BASE/manifest.webmanifest")" = 401 ]
 manifest=$(curl -fsS --max-filesize 16384 -u "$OPERATOR" "$BASE/manifest.webmanifest" |
   jq -ce 'select(type == "object") | {id, name} | select(.id | type == "string") | select(.name | type == "string")')
 expected_id="/pwa/$(printf %s "$SERVER_NAME" | sha256sum | cut -d' ' -f1)"
 [ "$(printf %s "$manifest" | jq -r .id)" = "$expected_id" ]
-[ "$(printf %s "$manifest" | jq -r .name)" = "$SERVER_NAME" ]
+[ "$(printf %s "$manifest" | jq -r .name)" = "$APP_NAME" ]
 ```
 
 ## 4. Background Web Push
 
-Installed Android PWAs can receive agent `done`/`blocked` notifications while closed. HTTPS and gateway access control are required. Service has one global subscription owner; every browser that enables notifications adds an endpoint to that owner's deduplicated list and receives each eligible notification. Registration state remains local to each browser. Focused app windows suppress notification display locally.
+Installed Android PWAs can receive agent `done`/`blocked` notifications while closed. HTTPS and gateway access control are required. Service has one global subscription owner; every browser that enables notifications adds an endpoint to that owner's deduplicated list and receives each eligible notification. Registration state remains local to each browser. Focused app windows suppress notification display locally. Background notifications request sound, vibration, repeated alerts, and persistent display; browser and OS notification-channel settings remain authoritative and may ignore those hints.
 
 Configure VAPID keys outside repository:
 

@@ -24,7 +24,14 @@ describe('push service worker', () => {
     let promise
     handlers.push({ data: { json: () => ({ title: 'Done', body: 'agent', pane_id: 'w1:p2', url: 'https://evil.example' }) }, waitUntil: (p) => promise = p })
     await promise
-    expect(registration.showNotification).toHaveBeenCalledWith('Done', expect.objectContaining({ data: { pane_id: 'w1:p2' } }))
+    expect(registration.showNotification).toHaveBeenCalledWith('Done', expect.objectContaining({
+      data: { pane_id: 'w1:p2' },
+      tag: 'herdr-agent-w1:p2-update',
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: [200, 100, 200],
+    }))
     handlers.notificationclick({ notification: { close: vi.fn(), data: { pane_id: 'w1:p2', url: 'https://evil.example' } }, waitUntil: (p) => promise = p })
     await promise
     expect(window.postMessage).toHaveBeenCalledWith({ type: 'herdr-pane-focus', pane_id: 'w1:p2' })

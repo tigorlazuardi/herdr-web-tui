@@ -29,7 +29,7 @@ func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, staging
 	mux.Handle("/send", newSendHandler(herdr, stagingDir, logger))
 	mux.Handle("/clientlog", newClientlogHandler(logger))
 	mux.Handle("/ws", newPTYHandler(logger))
-	manifestHandler := newManifestHandler(os.Getenv("SERVER_NAME"))
+	manifestHandler := newManifestHandler(os.Getenv("SERVER_NAME"), os.Getenv("APP_NAME"))
 	mux.Handle("/manifest.webmanifest", manifestHandler)
 	mux.Handle("/manifest.json", manifestHandler)
 	mux.Handle("/", newStaticHandler(fsys))
