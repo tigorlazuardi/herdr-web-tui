@@ -3,7 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -158,13 +160,12 @@ func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
 	}
 }
 
-func TestManifest_UsesServerNameAndIgnoresRemoteUser(t *testing.T) {
-	get := func(serverName, user string) manifest {
+func TestManifestUsesServerName(t *testing.T) {
+	get := func(serverName, requestPath string) manifest {
 		t.Helper()
 		t.Setenv("SERVER_NAME", serverName)
 		handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
-		req := httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil)
-		req.Header.Set("Remote-User", user)
+		req := httptest.NewRequest(http.MethodGet, requestPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -187,14 +188,15 @@ func TestManifest_UsesServerNameAndIgnoresRemoteUser(t *testing.T) {
 		return m
 	}
 
-	fallback := get("", "$tinyauth_remote_user")
+	fallback := get("", "/manifest.webmanifest")
 	if fallback.ID != "" || fallback.Name != "Herdr Web TUI" || fallback.ShortName != "Herdr" {
 		t.Fatalf("unexpected fallback: %+v", fallback)
 	}
 
-	server := get("sg-prod-1", "$tinyauth_remote_user")
-	serverOtherUser := get("sg-prod-1", "alice")
-	if server.Name != "sg-prod-1" || server.ShortName != "sg-prod-1" || server.ID == "" || server.ID != serverOtherUser.ID || server.Name != serverOtherUser.Name {
+	server := get(" sg-prod-1 ", "/manifest.webmanifest")
+	legacyPath := get(" sg-prod-1 ", "/manifest.json")
+	expectedID := fmt.Sprintf("/pwa/%x", sha256.Sum256([]byte(" sg-prod-1 ")))
+	if server.Name != " sg-prod-1 " || server.ShortName != " sg-prod-1 " || server.ID != expectedID || legacyPath.Name != server.Name || legacyPath.ID != server.ID {
 		t.Fatalf("unexpected server manifest: %+v", server)
 	}
 	if server.Display != "standalone" || len(server.Icons) != 2 || server.Icons[0].Src != "/icon-192.png" || server.Icons[1].Src != "/icon-512.png" {

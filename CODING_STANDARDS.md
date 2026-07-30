@@ -46,8 +46,8 @@ Go formatting is enforced by `gofmt`; frontend compile and type correctness are 
 
 ## Repository-Specific Prohibitions
 
-- Do not move TLS, authentication, authorization, or access control into this service without an explicit architecture decision; the reverse proxy owns them. Session separation is concurrency isolation, not tenancy or security.
-- Do not accept user identity from query parameters for gateway-derived behavior; use trusted gateway `Remote-User` where the existing feature requires identity.
+- Do not move TLS, authentication, authorization, or access control into this service without an explicit architecture decision; the reverse proxy owns them. Session separation only prevents runtime focus and sizing contention for the single owner.
+- Do not add user identity from headers, query parameters, routes, or storage; deployment is single-owner and requests reaching service are trusted.
 - Do not expose `/tmp` artifact paths to clients, partially inject a prompt, or clear promptbox state after a failed send.
 - Do not add application artifact cleanup/TTL or upload count/size policy until required; OS `/tmp` cleanup and gateway `client_max_body_size` currently own those concerns.
 - Do not add dependencies where repository-selected platform/stdlib features already cover the need: `net/http` for HTTP/multipart, `log/slog` for logging, native Screen Wake Lock for standalone wake lock, Svelte transitions for animation, and CSS for styling.

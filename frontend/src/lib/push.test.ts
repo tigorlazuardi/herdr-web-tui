@@ -59,10 +59,10 @@ describe('push lifecycle', () => {
 
   it('surfaces config body and correlation reference in initial visible feedback', async () => {
     vi.stubGlobal('Notification', { permission: 'default' })
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response('authentication required', { status: 401, headers: { 'X-Request-Id': 'req-123' } }))))
-    await expect(pushConfig()).rejects.toThrow('Push configuration failed (401): authentication required [ref: req-123]')
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response('access denied', { status: 403, headers: { 'X-Request-Id': 'req-123' } }))))
+    await expect(pushConfig()).rejects.toThrow('Push configuration failed (403): access denied [ref: req-123]')
     const registration = { pushManager: { getSubscription: vi.fn() } } as unknown as ServiceWorkerRegistration
-    await expect(initialPushFeedback(registration)).resolves.toEqual({ state: 'error', message: 'Push configuration failed (401): authentication required [ref: req-123]' })
+    await expect(initialPushFeedback(registration)).resolves.toEqual({ state: 'error', message: 'Push configuration failed (403): access denied [ref: req-123]' })
   })
 
   it('surfaces save body and fallback correlation reference then rolls browser subscription back', async () => {

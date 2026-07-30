@@ -30,12 +30,9 @@ const (
 // /send handler uses, so a render pty and an inject targeting the same URL
 // path always agree on which Herdr session they mean.
 //
-// This is concurrency isolation, not tenancy: every session name reachable
-// from a URL is spawned under the same OS user with no access control of
-// its own (see the design doc's Multi-session concurrency section) — it
-// only stops two browser tabs on different paths from fighting over one
-// session's focus/sizing, it does not fence one viewer off from another's
-// session.
+// Session routing gives the single owner separate runtime namespaces, so
+// browser tabs on different paths do not contend over one session's focus or
+// sizing. Gateway access control remains outside this service.
 //
 // logger is the process-wide slog logger (already correlation-aware via
 // internal/logger); every log line this handler emits carries both the

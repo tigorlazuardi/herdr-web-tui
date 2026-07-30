@@ -38,7 +38,7 @@ Lock the tool + note any gotchas (e.g. `HERDR_ENV`, nested-launch block, write-o
   - Dedicated **prefix button** (`ctrl+b`) is a nice-to-have for Herdr.
   - Termux's **volume-key-as-Ctrl** fallback is **not possible in a browser** (no volume API) — skip.
 - **Mobile soft keyboard works (good)**: after closing the keyboard, tapping the TUI re-summons it automatically — xterm's hidden focusable textarea gets focus on tap. Confirmed OK. Our own frontend must preserve this (keep the xterm helper textarea focusable so tap = keyboard).
-- **Multi-client sizing = "last view wins"**: with a desktop and a mobile client attached at once, the shared pane resizes to whichever client was **last active** (Herdr sizes the pane to the last-active client's cols/rows), so the two contend and the view glitches on switch. Expected for a shared multiplexer; fine with a single active viewer. Feeds the multi-user fog.
+- **Multi-client sizing = "last view wins"**: with a desktop and a mobile client attached at once, the shared pane resizes to whichever client was **last active** (Herdr sizes the pane to the last-active client's cols/rows), so the two contend and the view glitches on switch. Expected for a shared multiplexer; fine with a single active viewer.
 - **Focus is server-wide** (see ticket 04 / skill): a browser client switching workspace moved `herdr pane current` for everyone — good for "inject into focused pane".
 
 ### Decision
@@ -55,7 +55,7 @@ Lock the tool + note any gotchas (e.g. `HERDR_ENV`, nested-launch block, write-o
 
 ttyd stays only as an optional pty↔websocket backend (or replace with our own node-pty ws). The prebuilt ttyd UI is rejected because the product needs its own page anyway (artifact promptbox, pill editor, thumbnails).
 
-**Per-session render (multi-user)**: route `(domain)/(path)` → the pty backend spawns `herdr --session <path>` (fallback `default`, name sanitized to `[a-zA-Z0-9-]`). Each named session is an isolated namespace (own socket, focus, sizing), so different users/paths never contend — this replaces raw ttyd's single fixed command and sidesteps the "last active client wins" glitch. (This is why our own pty-ws backend is cleaner than one fixed ttyd instance: the command varies per URL path.)
+**Per-session render**: route `(domain)/(path)` → pty backend spawns `herdr --session <path>` (fallback `default`, name sanitized to `[a-zA-Z0-9-]`). Each named session is a separate runtime namespace (own socket, focus, sizing), so different paths do not contend — this replaces raw ttyd's single fixed command and sidesteps "last active client wins" glitch. (This is why our own pty-ws backend is cleaner than one fixed ttyd instance: command varies per URL path.)
 
 ### Verified by transitivity (demo optional)
 

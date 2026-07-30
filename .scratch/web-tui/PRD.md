@@ -26,8 +26,7 @@ A thin standalone web service that sits in front of an already-running Herdr ser
    inline (positional placeholders), and on send the files upload to the server, their paths
    are substituted in, and the whole line is typed into the focused pane and submitted in one
    shot — so it works for an agent chatbox *or* any shell command (`imgcat [File 1]`).
-3. **Isolates concurrent viewers** by URL path → Herdr session, so different tabs/people don't
-   fight over one view.
+3. **Separates concurrent tabs** by URL path → Herdr session, so they do not fight over one view.
 4. Is **observable**: structured logs, a correlation id returned to the browser on every error,
    and errors bubbled in full so any failure is trivial to look up.
 
@@ -94,7 +93,7 @@ pty↔ws bridge, and an artifact daemon. Backend is one Go binary that embeds th
 - **Failable error-feedback** on every interaction: upload/inject failure and ws-disconnect surface inline with the full message + correlation ref id, keeping the user's text + pills intact; ws shows a visible "reconnecting…" state; a small client logger posts errors to `/clientlog` with the same id.
 - Frontend work loads the `frontend-design` skill.
 
-**Multi-session** — `(domain)/(path)` → `herdr --session <path>` on both the render pty and the inject daemon (fallback `default`, sanitized). Concurrency isolation only, **not** tenancy.
+**Multi-session** — `(domain)/(path)` → `herdr --session <path>` on both the render pty and the inject daemon (fallback `default`, sanitized). Separate runtime focus and sizing for the single owner.
 
 **Docs** — README + operator/deploy guide (nginx gateway, routing, env/flags, systemd) + design docs via Starlight (`astro-docs-setup`/`astro-docs-authoring`) + `llms.txt` + endpoint reference with I/O examples. **Code docs are written for coding agents** (the future reader): godoc on all exported + non-trivial unexported Go + package `doc.go`; tsdoc on key TS/Svelte modules; explain why/invariants/ctx-lifecycle/atomicity/correlation and call out gotchas (shared focus, all-or-nothing inject, framework-out-of-hot-path).
 
@@ -112,7 +111,7 @@ prefer few seams. This is greenfield, so these tests **set the pattern** (no pri
 ## Out of Scope
 
 - **Security / auth / TLS / upload size limits** — the nginx gateway.
-- **True multi-tenant / per-person isolation** — not provided; Herdr is a single-OS-user server with no account model. "Multi-user" here means concurrent viewers each on their own session (concurrency isolation), never enforced tenancy.
+- **Application identity and permissions** — absent by design. Deployment has one trusted owner; gateway controls access before requests reach service.
 - **A custom TUI renderer** — we stream the real Herdr TUI (xterm), never redraw it.
 - **Herdr plugin packaging** — standalone service; "plugin" is only a name prefix.
 - **Local desktop clipboard bridging** — that is `herdr --remote`'s job.

@@ -93,7 +93,6 @@ type manifestIcon struct {
 }
 
 func newManifestHandler(serverName string) http.Handler {
-	serverName = strings.TrimSpace(serverName)
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		name := "Herdr Web TUI"
 		shortName := "Herdr"

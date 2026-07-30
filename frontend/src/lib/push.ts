@@ -77,7 +77,7 @@ export async function initialPushFeedback(registration: ServiceWorkerRegistratio
   }
 }
 
-/** Focuses one strictly validated pane through authenticated same-origin API. */
+/** Focuses one strictly validated pane through trusted same-origin API. */
 export async function focusPane(paneId: string): Promise<void> {
   if (!validPaneId(paneId)) throw new Error('Invalid notification pane target')
   const response = await fetch('/api/push/focus', {

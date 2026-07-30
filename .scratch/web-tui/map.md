@@ -6,7 +6,7 @@ Labels: `wayfinder:map`
 
 A **spec/design doc** for `herdr-web-tui`: a thin standalone web service over Herdr that
 (1) renders the live Herdr TUI in a browser over http+ws via a pty wrapper (ttyd-style, no custom renderer), and
-(2) adds an **atomic artifact promptbox** — a **positional template**: the user writes text with attachment **placeholders** (e.g. `imgcat [File 1]`); on send, each attachment uploads to a flat `/tmp/<prefix>-<userid>/<uuid>[.ext]` and its placeholder resolves to that path, then the whole resolved line is injected into Herdr's **focused pane** via `herdr pane run` (text + Enter atomic). Works for **any pane** — an agent chatbox or a plain shell command — not just agents.
+(2) adds an **atomic artifact promptbox** — a **positional template**: the user writes text with attachment **placeholders** (e.g. `imgcat [File 1]`); on send, each attachment uploads to a flat `/tmp/<prefix>-<server-uid>/<uuid>[.ext]` and its placeholder resolves to that path, then the whole resolved line is injected into Herdr's **focused pane** via `herdr pane run` (text + Enter atomic). Works for **any pane** — an agent chatbox or a plain shell command — not just agents.
 
 Done when every decision below is locked and nothing is left to decide before someone builds it.
 
@@ -33,7 +33,7 @@ Done when every decision below is locked and nothing is left to decide before so
 - [Define the upload endpoint contract](issues/07-upload-endpoint-contract.md) — **single atomic multipart endpoint**: client posts template (ordered segments) + files; daemon saves to `/tmp`, resolves markers server-side, `herdr pane run` into focused pane, returns ok/fail (all-or-nothing). Size limits = gateway (nginx). Client never sees `/tmp` paths.
 - [Design the atomic promptbox compose + UX](issues/04-atomic-promptbox-compose-ux.md) — positional segment editor with atomic file pills (native backspace-delete), clipboard-paste → pill, ordering inherent in pill position, thumbnails/mime-badges/lucide-fallback. Residual (attachment cap, placement) = build-time frontend-design, non-blocking.
 
-- **Multi-session concurrency routing** (single trust domain, not multi-tenant) — `(domain)/(session-path)` → `herdr --session <path>` (fallback `default`) on both render pty and inject daemon; per-session isolation is for view/focus contention only, not security. Sanitize the session name (allowlist charset). Verified: `herdr --session <name>` is a global flag and each session has its own socket (`herdr session list`).
+- **Multi-session concurrency routing** — `(domain)/(session-path)` → `herdr --session <path>` (fallback `default`) on both render pty and inject daemon; per-session separation handles view/focus contention only. Sanitize session name (allowlist charset). Verified: `herdr --session <name>` is a global flag and each session has its own socket (`herdr session list`).
 
 - **Documentation (part of done):** README + operator/deploy guide (nginx gateway, `(domain)/(session)` routing, env/flags, systemd) + design docs published via Starlight (`astro-docs-setup`/`astro-docs-authoring`) + `llms.txt` + endpoint reference (`/send`, `/clientlog`, ws with I/O examples) + **agent-audience code docs** (the future reader is a coding agent — godoc on all exported + non-trivial unexported Go + package `doc.go`; tsdoc on key TS/Svelte modules; explain why/invariants/ctx-lifecycle/atomicity/correlation + call out gotchas like shared-focus & all-or-nothing inject; every build worker prompt requires this) + lesson-learnt reports (`report-authoring`).
 
@@ -44,9 +44,9 @@ Done when every decision below is locked and nothing is left to decide before so
 <!-- in-scope fog; graduates to tickets as the frontier advances -->
 
 - **Overall architecture / component diagram** — how ttyd, the web backend, the socket-API inject bridge, and the browser fit together. Graduates once transport + inject mechanisms are locked.
-- **Herdr session ↔ web-instance mapping** — one Herdr session per web instance? (partly answered: focus is server-wide/shared — a browser client navigating moves `pane current` for everyone, so the daemon's "focused pane" inject naturally targets what the browser user is looking at, no picker needed. Remaining: multi-client focus contention → see multi-user fog.)
+- **Herdr session ↔ web-instance mapping** — one Herdr session per web instance? (partly answered: focus is server-wide/shared — a browser client navigating moves `pane current` for everyone, so daemon's focused-pane inject naturally targets current browser view, no picker needed. Remaining: multi-client focus contention.)
 - ~~WebSocket resilience~~ — graduated to a transport requirement (ticket 02): **ws auto-reconnect** (Herdr panes survive detach → reconnect = re-attach + re-render), resize propagation via fit-addon, standalone PWA, no pull-to-refresh.
-- ~~Multi-browser concurrency~~ — **resolved: per-session URL routing (concurrency isolation only, NOT security).** `(herdr-tui-domain)/(path)` → `(path)` = Herdr session name (fallback `default`). Each named session is a separate *runtime* namespace (own socket, focus, sizing), so different paths never contend for view/focus (kills the "last active client wins" glitch). This is **not** tenant isolation: the whole server is one OS user, and anyone who reaches a path has full access to every session — real per-person isolation is not provided (see Out of scope). Cheap because `herdr --session <name>` is a global flag: render pty spawns `herdr --session <path>`, daemon injects with `herdr --session <path> pane run ...`. **Must sanitize** the path→session name (allowlist `[a-zA-Z0-9-]`, fallback `default`) — URL-controlled string fed to a process spawn. `/tmp` namespace stays per-uid flat (blobs are session-agnostic staging).
+- ~~Multi-browser concurrency~~ — **resolved: per-session URL routing.** `(herdr-tui-domain)/(path)` → `(path)` = Herdr session name (fallback `default`). Each named session is a separate runtime namespace (own socket, focus, sizing), so different paths do not contend for view/focus. Service remains one trusted owner with access to every session. Cheap because `herdr --session <name>` is a global flag: render pty spawns `herdr --session <path>`, daemon injects with `herdr --session <path> pane run ...`. **Must sanitize** path→session name (allowlist `[a-zA-Z0-9-]`, fallback `default`) — URL-controlled string fed to process spawn. `/tmp` namespace stays per-uid flat (blobs are session-agnostic staging).
 - **Final spec doc assembly** — the destination artifact; blocked on all decision tickets.
 
 ## Out of scope
@@ -54,7 +54,7 @@ Done when every decision below is locked and nothing is left to decide before so
 <!-- ruled beyond the destination; closed, never graduates -->
 
 - **Security / auth / TLS** — handled by the gateway (nginx). Explicit user call.
-- **True multi-tenant / per-person isolation** — not provided and not attempted. Herdr is a single-OS-user server with no account/permission model; it can only separate sessions as runtime namespaces, not as trust boundaries. "Multi-user" here means concurrent viewers each on their own session (concurrency isolation), never enforced tenancy. Real per-user isolation would need per-user OS accounts + per-user Herdr servers + gateway auth mapping — a separate effort.
+- **Application identity and permissions** — absent by design. Deployment has one trusted owner; gateway controls access before requests reach service.
 - **Custom TUI renderer** from `pane.read` — rejected; ttyd streams the real TUI.
 - **Herdr plugin packaging** — chose standalone thin service; "plugin" is just a name prefix.
 - **Local desktop clipboard bridging** — that is `herdr --remote`'s job; we are the SSH-first gap-filler.

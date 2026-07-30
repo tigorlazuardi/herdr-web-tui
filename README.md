@@ -14,8 +14,8 @@ long-running Go daemon with its frontend embedded.
 
 - Live Herdr terminal rendering and input over HTTP + WebSocket.
 - Mobile-friendly prompt controls and artifact upload into a pane.
-- Installable per-user PWA manifests.
-- Background Web Push broadcast to every browser that enables notifications.
+- Installable per-server PWA manifests.
+- Single-owner Web Push broadcast to every browser that enables notifications.
 - Notification clicks that focus the referenced Herdr pane.
 - One binary; no separate frontend server at runtime.
 
@@ -101,16 +101,16 @@ For distinct installed PWA names across servers, set a stable label per host:
 services.herdr-web-tui.environment.SERVER_NAME = config.networking.hostName;
 ```
 
-Manifest `name`, `short_name`, and identity use `SERVER_NAME` exactly; gateway
-`Remote-User` is not part of PWA identity. Include any desired `Herdr` prefix in
-the configured value. Existing installs may need reinstallation before launcher
-text updates.
+Manifest `name`, `short_name`, and identity use `SERVER_NAME` exactly. Include
+any desired `Herdr` prefix in configured value. Existing installs may need
+reinstallation before launcher text updates.
 
 ## Security boundary
 
-Daemon intentionally has no built-in TLS, authentication, or authorization.
-Gateway must own those controls and provide trusted `Remote-User`. Bind to
-loopback and do **not** expose raw listener directly to LAN or internet.
+Daemon intentionally has no built-in TLS, authentication, authorization, or
+user identity. Gateway must own TLS and access controls. Requests reaching daemon
+are trusted. Bind to loopback and do **not** expose raw listener directly to LAN
+or internet.
 
 Herdr plugins are ordinary unsandboxed code running as consumer's user. Review
 `herdr-plugin.toml` before install. Production users should prefer supervised

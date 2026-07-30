@@ -123,33 +123,41 @@ func TestStoreRejectsInvalidPersistedSubscription(t *testing.T) {
 }
 
 func TestStoreLoadsLegacyAndRewritesCurrentShape(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "push.json")
-	legacy, _ := json.Marshal(legacyRecord{User: "alice", Subscription: sub()})
-	if err := os.WriteFile(path, legacy, 0600); err != nil {
-		t.Fatal(err)
+	fixtures := map[string]any{
+		"identity-free": legacyStoreFile{Subscription: sub()},
+		"deployed v1":   map[string]any{"user": "alice", "subscription": sub()},
 	}
-	store, err := OpenStore(path)
-	if err != nil || len(store.Get()) != 1 {
-		t.Fatalf("legacy load: subscriptions=%v err=%v", store.Get(), err)
-	}
-	if err := store.Put(subWithEndpoint("https://push.example/new")); err != nil {
-		t.Fatal(err)
-	}
-	var current storeFile
-	body, _ := os.ReadFile(path)
-	if err := json.Unmarshal(body, &current); err != nil || len(current.Subscriptions) != 2 || bytes.Contains(body, []byte(`"user"`)) {
-		t.Fatalf("current rewrite=%s err=%v", body, err)
-	}
-	backup, err := os.ReadFile(path + ".legacy-v1.bak")
-	if err != nil || !bytes.Equal(backup, legacy) {
-		t.Fatalf("legacy backup=%s err=%v", backup, err)
-	}
-	if err := os.WriteFile(path, backup, 0600); err != nil {
-		t.Fatal(err)
-	}
-	rolledBack, err := OpenStore(path)
-	if err != nil || len(rolledBack.Get()) != 1 || rolledBack.Get()[0].Endpoint != sub().Endpoint {
-		t.Fatalf("rollback recovery: subscriptions=%v err=%v", rolledBack.Get(), err)
+	for name, fixture := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "push.json")
+			legacy, _ := json.Marshal(fixture)
+			if err := os.WriteFile(path, legacy, 0600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := OpenStore(path)
+			if err != nil || len(store.Get()) != 1 {
+				t.Fatalf("legacy load: subscriptions=%v err=%v", store.Get(), err)
+			}
+			if err := store.Put(subWithEndpoint("https://push.example/new")); err != nil {
+				t.Fatal(err)
+			}
+			var current storeFile
+			body, _ := os.ReadFile(path)
+			if err := json.Unmarshal(body, &current); err != nil || len(current.Subscriptions) != 2 || bytes.Contains(body, []byte(`"user"`)) {
+				t.Fatalf("current rewrite=%s err=%v", body, err)
+			}
+			backup, err := os.ReadFile(path + ".legacy-v1.bak")
+			if err != nil || !bytes.Equal(backup, legacy) {
+				t.Fatalf("legacy backup=%s err=%v", backup, err)
+			}
+			if err := os.WriteFile(path, backup, 0600); err != nil {
+				t.Fatal(err)
+			}
+			rolledBack, err := OpenStore(path)
+			if err != nil || len(rolledBack.Get()) != 1 || rolledBack.Get()[0].Endpoint != sub().Endpoint {
+				t.Fatalf("rollback recovery: subscriptions=%v err=%v", rolledBack.Get(), err)
+			}
+		})
 	}
 }
 
@@ -206,7 +214,6 @@ func TestPutValidationRejectsMalformedInput(t *testing.T) {
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPut, "/api/push/subscription", strings.NewReader(body))
-			r.Header.Set("Remote-User", "alice")
 			w := httptest.NewRecorder()
 			svc.Handler().ServeHTTP(w, r)
 			if w.Code != http.StatusBadRequest || len(store.Get()) != 0 {
@@ -216,25 +223,23 @@ func TestPutValidationRejectsMalformedInput(t *testing.T) {
 	}
 }
 
-func TestAPIAuthenticationLifecycle(t *testing.T) {
+func TestAPISingleOwnerLifecycle(t *testing.T) {
 	svc, s := testService(t)
 	h := svc.Handler()
 	r := httptest.NewRequest(http.MethodGet, "/api/push/config", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusUnauthorized {
+	if w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	body, _ := json.Marshal(subscriptionRequest{Endpoint: sub().Endpoint, Keys: sub().Keys})
 	r = httptest.NewRequest(http.MethodPut, "/api/push/subscription", bytes.NewReader(body))
-	r.Header.Set("Remote-User", "alice")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusNoContent || len(s.Get()) == 0 {
 		t.Fatalf("code=%d record=%v", w.Code, s.Get())
 	}
 	r = httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/x"}`))
-	r.Header.Set("Remote-User", "alice")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusNoContent || len(s.Get()) != 0 {
@@ -431,7 +436,6 @@ func TestDeleteAPIOnlyRemovesRequestedEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/first"}`))
-	req.Header.Set("Remote-User", "any-authenticated-user")
 	response := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(response, req)
 	got := store.Get()
@@ -561,7 +565,7 @@ func (c *countingConn) Close() error {
 	return c.Conn.Close()
 }
 
-func TestFocusAPIValidatesAuthenticatesAndUsesVerifiedSocketRequest(t *testing.T) {
+func TestFocusAPIValidatesAndUsesVerifiedSocketRequest(t *testing.T) {
 	svc, _ := testService(t)
 	var logs bytes.Buffer
 	svc.log = slog.New(slog.NewTextHandler(&logs, nil))
@@ -586,7 +590,6 @@ func TestFocusAPIValidatesAuthenticatesAndUsesVerifiedSocketRequest(t *testing.T
 	go serve(snapshotServer, `{"id":"focus-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"w1:p2","terminal_id":"t1","workspace_id":"w1","tab_id":"tab1","focused":false,"agent_status":"idle","revision":1}],"layouts":[],"agents":[]}}}`)
 	go serve(focusServer, `{"id":"focus-pane","result":{"type":"pane_info","pane":{"pane_id":"w1:p2"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/push/focus", strings.NewReader(`{"pane_id":"w1:p2"}`))
-	req.Header.Set("Remote-User", "alice")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(w, req)
@@ -604,17 +607,14 @@ func TestFocusAPIValidatesAuthenticatesAndUsesVerifiedSocketRequest(t *testing.T
 	}
 
 	for name, test := range map[string]struct {
-		user string
 		body string
 		want int
 	}{
-		"unauthenticated": {body: `{"pane_id":"w1:p2"}`, want: http.StatusUnauthorized},
-		"arbitrary URL":   {user: "alice", body: `{"pane_id":"w1:p2","url":"https://evil.example"}`, want: http.StatusBadRequest},
-		"invalid pane":    {user: "alice", body: `{"pane_id":"../p2"}`, want: http.StatusBadRequest},
+		"arbitrary URL": {body: `{"pane_id":"w1:p2","url":"https://evil.example"}`, want: http.StatusBadRequest},
+		"invalid pane":  {body: `{"pane_id":"../p2"}`, want: http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/api/push/focus", strings.NewReader(test.body))
-			r.Header.Set("Remote-User", test.user)
 			r.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			svc.Handler().ServeHTTP(response, r)
@@ -719,7 +719,6 @@ func TestFocusAPIRejectsTextPlainBeforeDial(t *testing.T) {
 		return nil, errors.New("must not dial")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/push/focus", strings.NewReader(`{"pane_id":"w1:p2"}`))
-	req.Header.Set("Remote-User", "alice")
 	req.Header.Set("Content-Type", "text/plain")
 	w := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(w, req)
@@ -833,7 +832,6 @@ func TestFocusAPIRejectsMissingPaneBeforeFocus(t *testing.T) {
 		}
 	}()
 	req := httptest.NewRequest(http.MethodPost, "/api/push/focus", strings.NewReader(`{"pane_id":"stale"}`))
-	req.Header.Set("Remote-User", "alice")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(w, req)
@@ -1022,7 +1020,6 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 		}
 	}()
 	req := httptest.NewRequest(http.MethodPost, "/api/push/focus", strings.NewReader(`{"pane_id":"secret-pane"}`))
-	req.Header.Set("Remote-User", "alice")
 	req.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(response, req)
@@ -1064,11 +1061,9 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 		t.Fatalf("missing or unsafe watcher diagnostics: %s", logs)
 	}
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/x"}`))
-	deleteReq.Header.Set("Remote-User", "alice")
 	svc.Handler().ServeHTTP(httptest.NewRecorder(), deleteReq)
 	body, _ := json.Marshal(subscriptionRequest{Endpoint: sub().Endpoint, Keys: sub().Keys})
 	putReq := httptest.NewRequest(http.MethodPut, "/api/push/subscription", bytes.NewReader(body))
-	putReq.Header.Set("Remote-User", "alice")
 	putResponse := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(putResponse, putReq)
 	if putResponse.Code != http.StatusNoContent {

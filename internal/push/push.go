@@ -84,8 +84,7 @@ type storeFile struct {
 	Subscriptions []webpush.Subscription `json:"subscriptions"`
 }
 
-type legacyRecord struct {
-	User         string               `json:"user"`
+type legacyStoreFile struct {
 	Subscription webpush.Subscription `json:"subscription"`
 }
 
@@ -98,7 +97,7 @@ type Store struct {
 	remove        func(string) error
 }
 
-// OpenStore loads current subscription storage plus deployed legacy single-user shape.
+// OpenStore loads current subscription storage plus deployed v1 single-subscription shape.
 func OpenStore(path string) (*Store, error) {
 	s := &Store{path: path, remove: os.Remove}
 	b, err := os.ReadFile(path)
@@ -118,8 +117,8 @@ func OpenStore(path string) (*Store, error) {
 		}
 		return s, nil
 	}
-	var legacy legacyRecord
-	if err := json.Unmarshal(b, &legacy); err != nil || legacy.User == "" || !validSubscription(legacy.Subscription) {
+	var legacy legacyStoreFile
+	if err := json.Unmarshal(b, &legacy); err != nil || !validSubscription(legacy.Subscription) {
 		return nil, errors.New("invalid push subscription store")
 	}
 	s.subscriptions = []webpush.Subscription{legacy.Subscription}
@@ -359,12 +358,6 @@ func NewServiceWithSender(c Config, store *Store, log *slog.Logger, sender Sende
 	return svc
 }
 
-// user accepts identity only from gateway-owned Remote-User.
-func user(r *http.Request) (string, bool) {
-	u := strings.TrimSpace(r.Header.Get("Remote-User"))
-	return u, u != ""
-}
-
 type subscriptionRequest struct {
 	Endpoint       string       `json:"endpoint"`
 	ExpirationTime *json.Number `json:"expirationTime"`
@@ -470,7 +463,7 @@ func publicHTTPClient() *http.Client {
 	return &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-// Handler serves minimal authenticated subscription lifecycle API.
+// Handler serves the trusted single-owner subscription lifecycle API.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/push/config", s.config)
@@ -481,21 +474,13 @@ func (s *Service) Handler() http.Handler {
 }
 
 // config returns server capability without global registration state.
-func (s *Service) config(w http.ResponseWriter, r *http.Request) {
-	if _, ok := user(r); !ok {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
+func (s *Service) config(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"publicKey": s.cfg.PublicKey, "enabled": s.cfg.Enabled()})
 }
 
 // put validates one bounded subscription document before endpoint-keyed atomic upsert.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
-	if _, ok := user(r); !ok {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	var input subscriptionRequest
 	d := json.NewDecoder(r.Body)
@@ -540,12 +525,8 @@ func validPaneID(id string) bool {
 	return true
 }
 
-// focus validates authenticated notification input, verifies pane existence, then focuses through protocol-16 socket API.
+// focus validates trusted notification input, verifies pane existence, then focuses through protocol-16 socket API.
 func (s *Service) focus(w http.ResponseWriter, r *http.Request) {
-	if _, ok := user(r); !ok {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
@@ -739,12 +720,8 @@ type deleteRequest struct {
 	Endpoint string `json:"endpoint"`
 }
 
-// del removes only endpoint supplied by authenticated caller browser.
+// del removes only endpoint supplied by caller browser.
 func (s *Service) del(w http.ResponseWriter, r *http.Request) {
-	if _, ok := user(r); !ok {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	var input deleteRequest
 	d := json.NewDecoder(r.Body)

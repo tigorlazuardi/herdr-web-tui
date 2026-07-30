@@ -117,8 +117,8 @@ server {
 
     client_max_body_size 200m;  # upload cap; app accepts any size otherwise
 
-    # Concrete secure sample: nginx Basic Auth. Another gateway auth system is
-    # fine only if it supplies an equally verified principal and fails closed.
+    # Concrete secure sample: nginx Basic Auth. Another gateway access-control
+    # system is fine if it fails closed before forwarding requests.
     auth_basic "Herdr operator";
     auth_basic_user_file /etc/nginx/herdr-web-tui.htpasswd;
 
@@ -126,8 +126,6 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header Remote-User $remote_user;
-        # Never use $http_remote_user: that forwards attacker-controlled input.
 
         # Required for the /ws upgrade.
         proxy_http_version 1.1;
@@ -137,27 +135,25 @@ server {
 }
 ```
 
-Run backend on loopback (`--addr 127.0.0.1:8080`) or an equivalent private socket/firewall rule. Never expose backend listener directly: it trusts gateway-owned `Remote-User`. Validate deployment before enabling Push. `/manifest.webmanifest` reflects backend-observed identity in bounded `id` and `name` fields, so normal and forged authenticated requests must match exactly and identify expected operator; unauthenticated request must return `401`.
+Run backend on loopback (`--addr 127.0.0.1:8080`) or an equivalent private socket/firewall rule. Never expose backend listener directly: every request reaching it is trusted. Validate gateway access and configured single-server PWA identity before enabling Push. `/manifest.webmanifest` derives bounded `id` and `name` only from `SERVER_NAME`; unauthenticated access remains a gateway concern.
 
 ```sh
 set -eu
 BASE=https://your-domain
 OPERATOR=operator
+SERVER_NAME=sg-prod-1
 
 [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-filesize 16384 "$BASE/manifest.webmanifest")" = 401 ]
-normal=$(curl -fsS --max-filesize 16384 -u "$OPERATOR" "$BASE/manifest.webmanifest" |
+manifest=$(curl -fsS --max-filesize 16384 -u "$OPERATOR" "$BASE/manifest.webmanifest" |
   jq -ce 'select(type == "object") | {id, name} | select(.id | type == "string") | select(.name | type == "string")')
-forged=$(curl -fsS --max-filesize 16384 -u "$OPERATOR" -H 'Remote-User: attacker' "$BASE/manifest.webmanifest" |
-  jq -ce 'select(type == "object") | {id, name} | select(.id | type == "string") | select(.name | type == "string")')
-expected_id="/pwa/$(printf %s "$OPERATOR" | sha256sum | cut -d' ' -f1)"
-[ "$normal" = "$forged" ]
-[ "$(printf %s "$normal" | jq -r .id)" = "$expected_id" ]
-[ "$(printf %s "$normal" | jq -r .name)" = "Herdr — $OPERATOR" ]
+expected_id="/pwa/$(printf %s "$SERVER_NAME" | sha256sum | cut -d' ' -f1)"
+[ "$(printf %s "$manifest" | jq -r .id)" = "$expected_id" ]
+[ "$(printf %s "$manifest" | jq -r .name)" = "$SERVER_NAME" ]
 ```
 
 ## 4. Background Web Push
 
-Installed Android PWAs can receive agent `done`/`blocked` notifications while closed. HTTPS and an authenticated gateway-provided `Remote-User` header are required. Every browser that enables notifications receives each eligible notification; registration state remains local to each browser, while backend stores a global endpoint-deduplicated subscription list. Focused app windows suppress notification display locally.
+Installed Android PWAs can receive agent `done`/`blocked` notifications while closed. HTTPS and gateway access control are required. Service has one global subscription owner; every browser that enables notifications adds an endpoint to that owner's deduplicated list and receives each eligible notification. Registration state remains local to each browser. Focused app windows suppress notification display locally.
 
 Configure VAPID keys outside repository:
 
@@ -188,7 +184,7 @@ variables enable OTLP traces and metrics; without endpoint providers remain
 active for correlated local slog and discard export. Service worker handles
 only push/click—no offline cache or fetch interception.
 
-Notification clicks carry only a bounded Herdr `pane_id`. Existing PWA windows receive a service-worker message; cold starts use a same-origin `pane_id` query that is removed after capture. Authenticated backend accepts only `application/json`, verifies pane still exists, then sends raw protocol-16 `pane.focus` with `{pane_id}`. Keep gateway CORS same-origin: do not emit `Access-Control-Allow-Origin` for other origins, and reject cross-site `Origin`/`Sec-Fetch-Site` requests when gateway supports those checks. Herdr focus is global/shared across attached clients, so another client can move focus immediately before or after notification handling.
+Notification clicks carry only a bounded Herdr `pane_id`. Existing PWA windows receive a service-worker message; cold starts use a same-origin `pane_id` query that is removed after capture. Trusted backend accepts only `application/json`, verifies pane still exists, then sends raw protocol-16 `pane.focus` with `{pane_id}`. Keep gateway CORS same-origin: do not emit `Access-Control-Allow-Origin` for other origins, and reject cross-site `Origin`/`Sec-Fetch-Site` requests when gateway supports those checks. Herdr focus is global/shared across attached clients, so another client can move focus immediately before or after notification handling.
 
 ## 5. Environment / flags
 

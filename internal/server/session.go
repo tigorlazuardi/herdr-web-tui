@@ -18,10 +18,9 @@ var sessionNamePattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 // so a browser tab on one URL path always resolves to the exact same Herdr
 // session on both the pty stream and any promptbox send from that tab —
 // this is what makes multi-session routing (design doc, "Multi-session
-// concurrency") a matter of concurrency isolation between URL paths, not
-// an access-control boundary: any path is reachable by anyone who can reach
-// this server at all, it just keeps two different paths' view/focus/sizing
-// from contending with each other.
+// concurrency") separate runtime namespaces for the single owner: different
+// paths do not contend over one session's view, focus, or sizing. Gateway
+// access control remains outside this service.
 //
 // This never itself produces a 4xx: a syntactically bad name silently
 // becomes "default", matching the fallback behaviour the design doc

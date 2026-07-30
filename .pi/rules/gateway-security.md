@@ -7,4 +7,4 @@ paths:
 
 # Gateway-owned security
 
-Keep TLS, authentication, authorization, and access control in reverse proxy. Service handles trusted upstream requests; security changes require explicit architecture decision.
+Keep TLS, authentication, authorization, and access control in reverse proxy. Service handles trusted upstream requests without user identity; security changes require explicit architecture decision.

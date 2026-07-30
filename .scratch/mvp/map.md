@@ -8,7 +8,7 @@ A **working MVP**: a web app, co-located with the Herdr server, that renders **o
 attached Herdr session** in the browser over **HTTP + WebSocket**, plus **artifact
 upload** — browser uploads a file (multipart) to `/tmp/<ns>/<file>` as a blob (extension
 kept as a type hint), then **injects that path into the focused pane's prompt** via
-Herdr send-text / send-keys. Security/auth/TLS and multi-user are out of scope.
+Herdr send-text / send-keys. Security/auth/TLS stay at gateway; app is single-owner.
 **This map carries execution** (Notes override) — tickets build the MVP, not just plan it.
 
 ## Notes
@@ -46,4 +46,4 @@ Herdr send-text / send-keys. Security/auth/TLS and multi-user are out of scope.
 ## Out of scope
 
 - **Security / auth / TLS** — handled by the gateway (nginx), not this app.
-- **Multi-user / multi-session concurrency** — MVP is one session, one browser. A later effort.
+- **Multi-session concurrency** — MVP is one session, one browser. A later effort.

@@ -21,7 +21,7 @@ Produce the markdown skill/rule content as a linked asset. NOTE: writing `.pi/ru
 Extracted two artifacts (user said "Gas" = consent to write):
 
 - **Skill** `.pi/skills/herdr/SKILL.md` — Herdr concept model (session/workspace/tab/pane/agent/modes) + full control surface: CLI (`pane current|read|send-text|send-keys|run`, `agent list|send|read|wait|focus`, workspace/tab lifecycle), socket API (`HERDR_SOCKET_PATH`, methods mirror CLI, event subscriptions), integrations for authoritative agent state, and the remote/clipboard gap that motivates a web layer. Intent-triggered.
-- **Rule** `.pi/rules/herdr-web-tui.md` (paths `**/*`) — this repo's constraints: thin layer only (reuse ttyd + socket API, no custom renderer), security = gateway's job, not-a-plugin, not-tmux; atomic promptbox contract (flat `/tmp/<prefix>-<userid>/<uuid>[.ext]`, focused-pane inject, prefer `pane run`/`agent send`).
+- **Rule** `.pi/rules/herdr-web-tui.md` (paths `**/*`) — this repo's constraints: thin layer only (reuse ttyd + socket API, no custom renderer), security = gateway's job, not-a-plugin, not-tmux; atomic promptbox contract (flat `/tmp/<prefix>-<server-uid>/<uuid>[.ext]`, focused-pane inject, prefer `pane run`/`agent send`).
 
 Key facts surfaced for later tickets:
 - `herdr pane current` resolves the focused pane; socket: omit `pane_id` → active focused pane.

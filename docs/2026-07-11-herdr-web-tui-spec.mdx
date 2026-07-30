@@ -27,8 +27,8 @@ and give it a first-class way to get files (artifacts) into a pane.
 
 **Out of scope**
 - **Security / auth / TLS** — the gateway (nginx) handles it.
-- **True multi-tenant / per-person isolation** — not provided; Herdr is a single-OS-user
-  server with no account model (see [Multi-session](#multi-session-concurrency)).
+- **Application identity and permissions** — absent; deployment has one trusted owner and
+  gateway controls access (see [Multi-session](#multi-session-concurrency)).
 - **A custom TUI renderer** — we stream the real Herdr TUI, never re-draw it.
 - **Herdr plugin packaging** — this is a standalone service; "plugin" is only a name prefix.
 - **Local desktop clipboard bridging** — that is `herdr --remote`'s job.
@@ -170,8 +170,7 @@ promptbox **template** (ordered segments + file markers), all **files** in order
 **session name** (from the route, sanitized). Atomically:
 
 1. Save each file → `/tmp/<prefix>-<server-uid>/<uuid>[.ext]` (flat; `.ext` = agent hint from
-   filename/mime). `<server-uid>` = the OS user the daemon runs as (storage is a server-side
-   concern; no gateway header, no per-person id).
+   filename/mime). `<server-uid>` = daemon's numeric effective UID; storage stays server-side.
 2. Resolve each marker to its saved path — **server-side; the client never sees `/tmp` paths**.
 3. `herdr --session <name> pane run <focused-pane> <resolved-text>` — text + Enter atomic —
    into that session's focused pane.
@@ -191,8 +190,8 @@ Route `(herdr-tui-domain)/(path)` where `(path)` = Herdr session name (fallback 
   glitch of two clients on one session).
 - Cheap because `herdr --session <name>` is a global flag: the render pty spawns
   `herdr --session <path>`, and the daemon injects with `herdr --session <path> pane run …`.
-- **This is concurrency isolation, not security.** The whole server is one OS user; anyone who
-  reaches a path has full access to every session. Real per-person isolation is out of scope.
+- **This is concurrency separation, not access control.** Single trusted owner can reach every
+  session; gateway decides which requests reach service.
 - **Sanitize** the path→session name (allowlist `[a-zA-Z0-9-]`, fallback `default`) — it is a
   URL-controlled string fed to a process spawn.
 

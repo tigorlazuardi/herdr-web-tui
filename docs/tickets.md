@@ -69,7 +69,7 @@ as part of "done" — the observability spine is built in ticket 0 and each slic
 - [ ] The same session name is used by the inject daemon so a promptbox lands in the pane of the session the user is viewing.
 - [ ] Two different paths render two independent sessions in two tabs without cross-contention.
 - [ ] Session name logged as a correlation field.
-- [ ] Agent-audience doc comments noting this is concurrency isolation, not tenancy.
+- [ ] Agent-audience doc comments explaining single-owner runtime separation and shared gateway access boundary.
 
 ## 3. Mobile/touch hardening + PWA
 
