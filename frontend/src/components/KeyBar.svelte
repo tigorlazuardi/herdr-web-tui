@@ -23,14 +23,12 @@
   function press(chip: AccessoryChip) {
     if (suppressClick) {
       suppressClick = false
-      return
-    }
-    if (chip.kind === 'modifier') {
+    } else if (chip.kind === 'modifier') {
       sticky.toggle(chip.key as 'ctrl' | 'alt' | 'fn')
-      if (sticky.state[chip.key as 'ctrl' | 'alt' | 'fn']) bridge.openKeyboard()
-      return
+    } else {
+      bridge.sendInput(chip.kind === 'text' ? chip.key : sticky.consume(chip.key))
     }
-    bridge.sendInput(chip.kind === 'text' ? chip.key : sticky.consume(chip.key))
+    bridge.openKeyboard()
   }
 
   // ponytail: browser owns horizontal swipe/scroll. Only punctuation keeps long-press alternate.
