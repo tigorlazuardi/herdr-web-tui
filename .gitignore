@@ -4,3 +4,6 @@
 /.pi/taskflows/runs/
 result
 .pi/remote-pi/
+
+.pi-subagents
+.pi/loops/
