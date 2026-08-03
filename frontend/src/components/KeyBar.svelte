@@ -60,6 +60,7 @@
 
 <div class="keybar" role="toolbar" aria-label="Accessory key rail">
   {#each ACCESSORY_CHIPS as chip (chip.id)}
+    <!-- Keep xterm focused: mobile IME closes when a rail button takes focus before click. -->
     <button
       type="button"
       class:mod={chip.kind === 'modifier'}
@@ -67,6 +68,7 @@
         ? mods[chip.key as 'ctrl' | 'alt' | 'fn']
         : undefined}
       title={ALTERNATES[chip.key] ? `long-press for ${ALTERNATES[chip.key]}` : undefined}
+      onmousedown={(event) => event.preventDefault()}
       onpointerdown={(event) => startAlternate(event, chip)}
       onpointermove={movePointer}
       onpointerup={cancelAlternate}
