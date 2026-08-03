@@ -168,6 +168,21 @@ export function openKeyboard(
   })
 }
 
+/** Preserves Shift+Enter as modified Enter instead of xterm collapsing it to CR. */
+export function browserKeyInput(
+  event: Pick<KeyboardEvent, 'type' | 'key' | 'shiftKey' | 'ctrlKey' | 'altKey' | 'metaKey' | 'isComposing'>,
+): string | null {
+  return event.type === 'keydown' &&
+    event.key === 'Enter' &&
+    event.shiftKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.isComposing
+    ? '\x1b[13;2u'
+    : null
+}
+
 /**
  * Reads the persisted font size, guarded because localStorage can throw
  * (private/incognito mode, disabled storage, quota errors) — a readability
@@ -348,6 +363,13 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
     term.resize(cols, rows)
     ws.send(asSendable(encodeResizeFrame(cols, rows)))
   }
+
+  term.attachCustomKeyEventHandler((event) => {
+    const input = browserKeyInput(event)
+    if (input === null) return true
+    if (ws?.readyState === WebSocket.OPEN) ws.send(asSendable(encodeInput(input)))
+    return false
+  })
 
   term.onData((data) => {
     if (ws?.readyState === WebSocket.OPEN) {

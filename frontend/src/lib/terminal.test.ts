@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  browserKeyInput,
   clampFontSize,
   initializeAfterTerminalFont,
   openKeyboard,
@@ -22,6 +23,30 @@ function deferred<T>() {
 // WebSocket (see clampFontSize's doc comment in terminal.ts); the rest of
 // createTerminalBridge is exercised manually/on-device per tickets.md ("3.
 // Mobile/touch hardening" acceptance: "Verified on-device").
+describe('browserKeyInput', () => {
+  const event = (overrides: Partial<KeyboardEvent> = {}) => ({
+    type: 'keydown',
+    key: 'Enter',
+    shiftKey: true,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    isComposing: false,
+    ...overrides,
+  }) as KeyboardEvent
+
+  it('encodes Shift+Enter as modified Enter for multiline prompts', () => {
+    expect(browserKeyInput(event())).toBe('\x1b[13;2u')
+  })
+
+  it('leaves plain Enter, other chords, keyup, and IME composition to xterm', () => {
+    expect(browserKeyInput(event({ shiftKey: false }))).toBeNull()
+    expect(browserKeyInput(event({ ctrlKey: true }))).toBeNull()
+    expect(browserKeyInput(event({ type: 'keyup' }))).toBeNull()
+    expect(browserKeyInput(event({ isComposing: true }))).toBeNull()
+  })
+})
+
 describe('terminal font family', () => {
   it('keeps system monospace primary and Symbols Nerd Font Mono as PUA fallback', () => {
     expect(TERMINAL_FONT_FAMILY).toContain('ui-monospace')
