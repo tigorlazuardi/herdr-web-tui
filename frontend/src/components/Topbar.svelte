@@ -10,11 +10,13 @@
     inputMode = $bindable(),
     connectionState,
     wakeLockUnavailable,
+    onPreview,
   }: {
     bridge: TerminalBridge
     inputMode: InputMode
     connectionState: ConnectionState
     wakeLockUnavailable: boolean
+    onPreview: () => void
   } = $props()
 
   const NEXT_MODE: Record<InputMode, InputMode> = {
@@ -58,6 +60,8 @@
     {/if}
   </div>
 
+  <button class="preview" type="button" onclick={onPreview}>Preview</button>
+
   <!-- Single button names current mode; tap swaps Text composer and accessory rail. -->
   <button
     class="toggle"
@@ -100,6 +104,7 @@
   /* Auto-width pill, not the old fixed 2rem circle: a text label beside
      the icon needs to fit three different word lengths (Text/Keys/Termux)
      without truncating or forcing a fixed width sized for the longest. */
+  .preview,
   .toggle {
     flex: none;
     display: flex;
@@ -112,6 +117,12 @@
     background: rgba(255, 255, 255, 0.1);
     color: #e7e5e4;
     font: 600 0.8rem/1 system-ui, sans-serif;
+    white-space: nowrap;
+  }
+
+  .preview {
+    height: 2rem;
+    padding: 0 0.65rem;
     white-space: nowrap;
   }
 

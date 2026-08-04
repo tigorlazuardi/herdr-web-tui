@@ -7,6 +7,7 @@
   import { onDestroy, onMount } from 'svelte'
   import KeyBar from './components/KeyBar.svelte'
   import Topbar from './components/Topbar.svelte'
+  import PanePreview from './components/PanePreview.svelte'
   import { createStickyModifiers } from './lib/keybar'
   import { createTerminalBridge, type ConnectionState } from './lib/terminal'
   import { holdPWAScreenAwake } from './lib/wake-lock'
@@ -15,6 +16,7 @@
   let container: HTMLDivElement
   let connectionState = $state<ConnectionState>('connecting')
   let wakeLockUnavailable = $state(false)
+  let preview: { open: () => Promise<void> }
 
   // Shared between the terminal bridge (consulted on every soft-keyboard
   // keystroke via term.onData) and KeyBar (toggled/read for the UI
@@ -80,7 +82,8 @@
        can be in the DOM at once. Nothing here is position:fixed over
        another element in this stack — that's what let the old floating
        key bar cover the promptbox (issue #2). -->
-  <Topbar {bridge} bind:inputMode {connectionState} {wakeLockUnavailable} />
+  <Topbar {bridge} bind:inputMode {connectionState} {wakeLockUnavailable} onPreview={() => void preview.open()} />
+  <PanePreview bind:this={preview} />
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- This div isn't a keyboard-operable control; it's xterm's own mount

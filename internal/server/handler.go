@@ -26,6 +26,7 @@ func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, staging
 	if len(pushService) > 0 && pushService[0] != nil {
 		mux.Handle("/api/push/", pushService[0].Handler())
 	}
+	mux.Handle("/api/pane-preview/", newPreviewHandler(herdr, logger))
 	mux.Handle("/send", newSendHandler(herdr, stagingDir, logger))
 	mux.Handle("/clientlog", newClientlogHandler(logger))
 	mux.Handle("/ws", newPTYHandler(logger))

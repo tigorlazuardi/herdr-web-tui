@@ -57,18 +57,17 @@ type HerdrClient interface {
 	// /send handler for the full ordering invariant).
 	PaneRun(ctx context.Context, session, pane, text string) error
 
-	// PaneRead returns the pane's visible content, up to lines lines
-	// (0 = herdr's default). Not used by /send in v0; present so the
-	// interface matches the full control surface this service may grow
-	// into (e.g. surfacing pane output to the browser).
+	// PaneRead returns raw visible text for the focused-pane browser preview,
+	// up to lines lines (0 = herdr's default).
 	PaneRead(ctx context.Context, session, pane string, lines int) (string, error)
 }
 
 // ExecHerdrClient is the production HerdrClient: it shells out to the
 // `herdr` binary found on PATH via exec.CommandContext, so a cancelled ctx
 // (request timeout, client disconnect) kills the subprocess instead of
-// leaking it. All herdr CLI output is JSON (see the herdr skill), so
-// success responses are parsed directly with no screen-scraping.
+// leaking it. Herdr commands use JSON output and are parsed directly, except
+// PaneRead deliberately requests `--format text` and returns raw visible-pane
+// output for browser display.
 type ExecHerdrClient struct {
 	logger *slog.Logger
 }
@@ -113,7 +112,7 @@ func (c *ExecHerdrClient) PaneRun(ctx context.Context, session, pane, text strin
 }
 
 func (c *ExecHerdrClient) PaneRead(ctx context.Context, session, pane string, lines int) (string, error) {
-	args := []string{"pane", "read", pane}
+	args := []string{"pane", "read", pane, "--source", "visible", "--format", "text"}
 	if lines > 0 {
 		args = append(args, "--lines", strconv.Itoa(lines))
 	}
