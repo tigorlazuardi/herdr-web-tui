@@ -380,9 +380,11 @@ export function createTerminalBridge(sticky: StickyModifiers): TerminalBridge {
       // paste); consume() is run per-character so the latch, if armed,
       // only ever applies to the first and clears immediately after —
       // consume() on subsequent already-unarmed chars is a no-op passthrough.
-      const out = Array.from(data)
-        .map((ch) => sticky.consume(ch))
-        .join('')
+      // ponytail: xterm emits focus reports during openKeyboard's blur/focus reset;
+      // they are terminal protocol, not user's next key, so must not consume latch.
+      const out = data === '\x1b[I' || data === '\x1b[O'
+        ? data
+        : Array.from(data).map((ch) => sticky.consume(ch)).join('')
       ws.send(asSendable(encodeInput(out)))
     }
   })

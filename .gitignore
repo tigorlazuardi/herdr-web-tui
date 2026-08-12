@@ -1,6 +1,8 @@
 /herdr-web-tui
 /frontend/dist
 /frontend/node_modules
+/frontend/test-results/
+/frontend/playwright-report/
 /.pi/taskflows/runs/
 result
 .pi/remote-pi/
