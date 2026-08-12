@@ -3,7 +3,6 @@ package herdrclient
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -39,13 +38,13 @@ func setupPaneSendInputSocket(t *testing.T, protocol int) net.Listener {
 }
 
 func TestParseServerStatus_AcceptsReviewedFixturesAndRejectsUnknown(t *testing.T) {
-	for _, protocol := range []int{16, 17} {
-		fixture := []byte(`{"running":true,"protocol":` + string(rune('0'+protocol/10)) + string(rune('0'+protocol%10)) + `,"socket":"/tmp/herdr.sock"}`)
+	for _, protocol := range []int{16, 17, 19} {
+		fixture := []byte(`{"running":true,"protocol":` + strconv.Itoa(protocol) + `,"socket":"/tmp/herdr.sock"}`)
 		if _, err := parseServerStatus(fixture); err != nil {
 			t.Fatalf("protocol %d fixture rejected: %v", protocol, err)
 		}
 	}
-	if _, err := parseServerStatus([]byte(`{"running":true,"protocol":18,"socket":"/tmp/herdr.sock"}`)); err == nil || !strings.Contains(err.Error(), "unsupported herdr protocol 18") {
+	if _, err := parseServerStatus([]byte(`{"running":true,"protocol":20,"socket":"/tmp/herdr.sock"}`)); err == nil || !strings.Contains(err.Error(), "unsupported herdr protocol 20") {
 		t.Fatalf("expected unknown protocol to fail closed, got %v", err)
 	}
 }
@@ -61,10 +60,10 @@ func TestExecHerdrClient_PaneSendInput_WritesReviewedEnvelopeForAcceptedProtocol
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix socket transport")
 	}
-	for _, protocol := range []int{16, 17} {
+	for _, protocol := range []int{16, 17, 19} {
 		t.Run(strconv.Itoa(protocol), func(t *testing.T) {
 			listener := setupPaneSendInputSocket(t, protocol)
-			request := make(chan map[string]any, 1)
+			request := make(chan string, 1)
 			go func() {
 				conn, acceptErr := listener.Accept()
 				if acceptErr != nil {
@@ -72,9 +71,7 @@ func TestExecHerdrClient_PaneSendInput_WritesReviewedEnvelopeForAcceptedProtocol
 				}
 				defer conn.Close()
 				line, _ := bufio.NewReader(conn).ReadBytes('\n')
-				var envelope map[string]any
-				_ = json.Unmarshal(line, &envelope)
-				request <- envelope
+				request <- string(line)
 				_, _ = conn.Write([]byte(`{"id":"herdr-web-tui-send","result":{"type":"ok"}}` + "\n"))
 			}()
 
@@ -82,14 +79,9 @@ func TestExecHerdrClient_PaneSendInput_WritesReviewedEnvelopeForAcceptedProtocol
 			if err := client.PaneSendInput(context.Background(), "work", "w1:p2", "hello", "ctrl+enter"); err != nil {
 				t.Fatalf("PaneSendInput: %v", err)
 			}
-			got := <-request
-			params := got["params"].(map[string]any)
-			if got["method"] != "pane.send_input" || params["pane_id"] != "w1:p2" || params["text"] != "hello" {
-				t.Fatalf("unexpected envelope: %#v", got)
-			}
-			keys := params["keys"].([]any)
-			if len(keys) != 1 || keys[0] != "ctrl+enter" {
-				t.Fatalf("expected one submit key, got %#v", keys)
+			want := `{"id":"herdr-web-tui-send","method":"pane.send_input","params":{"pane_id":"w1:p2","text":"hello","keys":["ctrl+enter"]}}` + "\n"
+			if got := <-request; got != want {
+				t.Fatalf("envelope = %q, want %q", got, want)
 			}
 		})
 	}

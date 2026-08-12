@@ -135,8 +135,8 @@ type socketResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// parseServerStatus validates only reviewed protocol 16/17 status envelopes.
-// Both versions share the consumed status and pane.send_input shapes; newer
+// parseServerStatus validates only reviewed protocol 16/17/19 status envelopes.
+// All three versions share the consumed status and pane.send_input shapes; other
 // protocols fail closed until their schema and a full-path fixture are reviewed.
 func parseServerStatus(out []byte) (serverStatus, error) {
 	var status serverStatus
@@ -146,7 +146,7 @@ func parseServerStatus(out []byte) (serverStatus, error) {
 	if !status.Running || status.Protocol == nil || status.Socket == "" {
 		return status, errors.New("herdr session is not running or status is incomplete")
 	}
-	if *status.Protocol != 16 && *status.Protocol != 17 {
+	if *status.Protocol != 16 && *status.Protocol != 17 && *status.Protocol != 19 {
 		return status, fmt.Errorf("unsupported herdr protocol %d", *status.Protocol)
 	}
 	if !filepath.IsAbs(status.Socket) {
