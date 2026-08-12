@@ -11,6 +11,19 @@ async function mockSend(page: import('@playwright/test').Page, bodies: string[])
   })
 }
 
+test('mobile promptbox Enter inserts a newline instead of submitting', async ({ page }) => {
+  const bodies: string[] = []
+  await mockSend(page, bodies)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  const message = page.getByRole('textbox', { name: 'Message' })
+  await message.fill('hello')
+  await message.press('Enter')
+
+  await expect(message).toHaveValue('hello\n')
+  expect(bodies).toHaveLength(0)
+})
+
 test('normal Send tap submits Enter once', async ({ page }) => {
   const bodies: string[] = []
   await mockSend(page, bodies)

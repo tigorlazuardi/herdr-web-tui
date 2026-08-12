@@ -198,7 +198,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !matchMedia('(max-width: 40rem)').matches) {
       e.preventDefault()
       void handleSend()
     }
