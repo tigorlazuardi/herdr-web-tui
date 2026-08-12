@@ -20,17 +20,23 @@
    * list) are independent state; lib/markers.ts's parseTemplate() is the
    * only place that reconciles them, and only at send time.
    */
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { flip } from 'svelte/animate'
   import Paperclip from '@lucide/svelte/icons/paperclip'
   import Send from '@lucide/svelte/icons/send'
   import Copy from '@lucide/svelte/icons/copy'
+  import X from '@lucide/svelte/icons/x'
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle'
+  import { Button, Popover } from 'sve-ui'
   import AttachmentPreview from './AttachmentPreview.svelte'
   import MimeBadge from './MimeBadge.svelte'
   import { parseTemplate, removeMarker, type Attachment } from '../lib/markers'
   import { resolveMime } from '../lib/sniff'
-  import { createHttpUploadClient, type UploadClient } from '../lib/transport'
+  import {
+    createHttpUploadClient,
+    type SubmitKey,
+    type UploadClient,
+  } from '../lib/transport'
   import { sendSegments } from '../lib/send'
   import { reportClientError } from '../lib/logger'
 
@@ -58,10 +64,17 @@
   let sending = $state(false)
   let error = $state<{ message: string; refID?: string } | null>(null)
   let copied = $state(false)
+  let submitMenuOpen = $state(false)
+  let suppressSendClick = false
+  let pressTimer: ReturnType<typeof setTimeout> | null = null
+  let suppressResetTimer: ReturnType<typeof setTimeout> | null = null
+  let pointerStart: { x: number; y: number } | null = null
 
   /** Inserts `§N` (N = the new attachment count) at the current caret, restoring caret after it. */
   async function insertAttachment(file: File, mime: string) {
-    attachments = [...attachments, { id: crypto.randomUUID(), file, mime }]
+    // ponytail: randomUUID needs a secure context; random bytes keep this UI-only key unique over Tailscale HTTP.
+    const id = crypto.randomUUID?.() ?? [...crypto.getRandomValues(new Uint32Array(4))].join('-')
+    attachments = [...attachments, { id, file, mime }]
     const marker = `§${attachments.length}`
     const caret = textarea?.selectionStart ?? text.length
     text = text.slice(0, caret) + marker + text.slice(caret)
@@ -100,12 +113,13 @@
     ;(e.target as HTMLInputElement).value = ''
   }
 
-  async function handleSend() {
+  async function handleSend(submitKey: SubmitKey = 'enter') {
     if (sending) return
+    submitMenuOpen = false
     sending = true
     error = null
     const segments = parseTemplate(text, attachments)
-    const result = await sendSegments(client, segments, session)
+    const result = await sendSegments(client, segments, session, submitKey)
     sending = false
 
     if (result.ok) {
@@ -127,6 +141,62 @@
     setTimeout(() => (copied = false), 1500)
   }
 
+  /** Long press opens alternate submit; suppression lasts only through same gesture's click. */
+  function startSubmitPress(event: PointerEvent) {
+    if (sending || event.button !== 0) return
+    pointerStart = { x: event.clientX, y: event.clientY }
+    ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+    pressTimer = setTimeout(() => {
+      pressTimer = null
+      pointerStart = null
+      suppressSendClick = true
+      submitMenuOpen = true
+    }, 500)
+  }
+
+  function moveSubmitPointer(event: PointerEvent) {
+    if (!pointerStart) return
+    if (Math.abs(event.clientX - pointerStart.x) + Math.abs(event.clientY - pointerStart.y) > 8) {
+      resetSubmitPress()
+      suppressSendClick = true
+    }
+  }
+
+  function resetSubmitPress() {
+    if (pressTimer) clearTimeout(pressTimer)
+    pressTimer = null
+    pointerStart = null
+  }
+
+  function finishSubmitPress() {
+    resetSubmitPress()
+    if (!suppressSendClick) return
+    suppressResetTimer = setTimeout(() => {
+      suppressSendClick = false
+      suppressResetTimer = null
+    }, 0)
+  }
+
+  function cancelSubmitPress() {
+    resetSubmitPress()
+    suppressSendClick = false
+  }
+
+  function handleSendClick(event: MouseEvent, triggerClick?: unknown) {
+    if (suppressSendClick) {
+      suppressSendClick = false
+      if (suppressResetTimer) clearTimeout(suppressResetTimer)
+      suppressResetTimer = null
+      return
+    }
+    // Keyboard activation opens choices; textarea Enter remains normal send.
+    if (event.detail === 0) {
+      if (typeof triggerClick === 'function') triggerClick(event)
+      return
+    }
+    void handleSend()
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -137,6 +207,11 @@
   function handleInput() {
     if (error) error = null
   }
+
+  onDestroy(() => {
+    cancelSubmitPress()
+    if (suppressResetTimer) clearTimeout(suppressResetTimer)
+  })
 </script>
 
 <div class="promptbox" class:hidden>
@@ -145,11 +220,11 @@
       <AlertTriangle size={16} aria-hidden="true" />
       <span class="error-message">{error.message}</span>
       {#if error.refID}
-        <button type="button" class="ref" onclick={copyRefID} title="Copy correlation id">
+        <Button variant="ghost" size="sm" class="ref" onclick={copyRefID} title="Copy correlation id">
           ref: {error.refID}
           <Copy size={12} aria-hidden="true" />
           {#if copied}<span class="copied">copied</span>{/if}
-        </button>
+        </Button>
       {/if}
     </div>
   {/if}
@@ -163,28 +238,32 @@
             <MimeBadge mime={att.mime} />
           </div>
           <span class="attachment-marker">§{i + 1}</span>
-          <button
-            type="button"
+          <Button
+            variant="solid"
+            color="default"
+            size="sm"
             class="attachment-remove"
             aria-label={`Remove attachment §${i + 1}`}
             onclick={() => removeAttachment(i + 1)}
           >
-            ×
-          </button>
+            <X size={12} aria-hidden="true" />
+          </Button>
         </div>
       {/each}
     </div>
   {/if}
 
   <div class="row">
-    <button
-      type="button"
+    <Button
+      variant="flat"
+      color="default"
+      size="sm"
       class="attach"
       aria-label="Attach a file"
       onclick={() => fileInput.click()}
     >
       <Paperclip size={18} aria-hidden="true" />
-    </button>
+    </Button>
     <input
       bind:this={fileInput}
       type="file"
@@ -209,9 +288,38 @@
       onkeydown={handleKeydown}
     ></textarea>
 
-    <button type="button" class="send" aria-label="Send" disabled={sending} onclick={handleSend}>
-      <Send size={18} aria-hidden="true" />
-    </button>
+    <Popover.Root bind:open={submitMenuOpen}>
+      <Popover.Trigger>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="solid"
+            color="primary"
+            size="sm"
+            class="send"
+            aria-label="Send (long-press or keyboard activate for alternate submit)"
+            title="Send · long-press for alternate submit"
+            disabled={sending}
+            onpointerdown={startSubmitPress}
+            onpointermove={moveSubmitPointer}
+            onpointerup={finishSubmitPress}
+            onpointercancel={cancelSubmitPress}
+            onclick={(event) => handleSendClick(event, props.onclick)}
+          >
+            <Send size={18} aria-hidden="true" />
+          </Button>
+        {/snippet}
+      </Popover.Trigger>
+      <Popover.Content side="top" align="end" sideOffset={8} class="submit-menu">
+        <p>Submit with</p>
+        <Button variant="ghost" size="sm" onclick={() => void handleSend('ctrl-enter')}>
+          Ctrl+Enter
+        </Button>
+        <Button variant="ghost" size="sm" onclick={() => void handleSend('alt-enter')}>
+          Alt+Enter
+        </Button>
+      </Popover.Content>
+    </Popover.Root>
   </div>
 </div>
 
@@ -322,19 +430,20 @@
   }
 
   .row {
+    --composer-control-height: 2.25rem;
     display: flex;
     align-items: flex-end;
     gap: 0.4rem;
   }
 
-  .attach,
-  .send {
+  :global(.attach.sve-button),
+  :global(.send.sve-button) {
     flex: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 2.25rem;
-    height: 2.25rem;
+    width: var(--composer-control-height);
+    height: var(--composer-control-height);
     border: 0;
     border-radius: 0.5rem;
     background: var(--button-bg, #1e293b);
@@ -342,9 +451,27 @@
     cursor: pointer;
   }
 
-  .send:disabled {
+  :global(.send.sve-button:disabled) {
     opacity: 0.5;
     cursor: default;
+  }
+
+  :global(.submit-menu.sve-popover-content) {
+    display: grid;
+    gap: 0.25rem;
+    min-width: 9rem;
+    padding: 0.4rem;
+    background: #1c1917;
+    color: #e7e5e4;
+  }
+
+  :global(.submit-menu p) {
+    margin: 0;
+    padding: 0.3rem 0.55rem;
+    color: #a8a29e;
+    font: 600 0.7rem/1 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
   .hidden-file-input {
@@ -353,8 +480,8 @@
 
   .editor {
     flex: 1;
-    min-height: 2.25rem;
-    max-height: 8rem;
+    min-height: var(--composer-control-height);
+    max-height: calc(3 * 1.35rem + 0.8rem);
     overflow-y: auto;
     padding: 0.4rem 0.6rem;
     border-radius: 0.5rem;

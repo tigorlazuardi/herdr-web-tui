@@ -31,6 +31,10 @@ func (noopHerdrClient) PaneRun(context.Context, string, string, string) error {
 	panic("noopHerdrClient: unexpected call")
 }
 
+func (noopHerdrClient) PaneSendInput(context.Context, string, string, string, string) error {
+	panic("noopHerdrClient: unexpected call")
+}
+
 func (noopHerdrClient) PaneRead(context.Context, string, string, int) (string, error) {
 	panic("noopHerdrClient: unexpected call")
 }

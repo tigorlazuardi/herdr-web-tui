@@ -26,9 +26,10 @@ type fakeHerdrClient struct {
 	focusedPane    *herdrclient.PaneInfo
 	focusedPaneErr error
 
-	paneRunErr error
+	paneRunErr       error
+	paneSendInputErr error
 
-	// calls records every PaneRun invocation, in order, so a test can
+	// calls records every final injection invocation, in order, so a test can
 	// assert PaneRun was called exactly once (or not at all).
 	calls []string
 }
@@ -45,6 +46,11 @@ func (f *fakeHerdrClient) PaneRun(_ context.Context, session, pane, text string)
 	return f.paneRunErr
 }
 
+func (f *fakeHerdrClient) PaneSendInput(_ context.Context, session, pane, text, key string) error {
+	f.calls = append(f.calls, fmt.Sprintf("%s/%s [%s]: %s", session, pane, key, text))
+	return f.paneSendInputErr
+}
+
 func (f *fakeHerdrClient) PaneRead(context.Context, string, string, int) (string, error) {
 	return "", nil
 }
@@ -54,6 +60,11 @@ func (f *fakeHerdrClient) PaneRead(context.Context, string, string, int) (string
 // Passing a template with no "session" field lets a test exercise the
 // fallback-to-"default" path.
 func buildMultipart(t *testing.T, tmpl *artifact.Template, session string, files map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	return buildMultipartWithSubmit(t, tmpl, session, "", files)
+}
+
+func buildMultipartWithSubmit(t *testing.T, tmpl *artifact.Template, session, submit string, files map[string]string) (*bytes.Buffer, string) {
 	t.Helper()
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
@@ -73,6 +84,13 @@ func buildMultipart(t *testing.T, tmpl *artifact.Template, session string, files
 			t.Fatal(err)
 		}
 		sw.Write([]byte(session))
+	}
+	if submit != "" {
+		kw, err := w.CreateFormField("submitKey")
+		if err != nil {
+			t.Fatal(err)
+		}
+		kw.Write([]byte(submit))
 	}
 	for field, content := range files {
 		fw, err := w.CreateFormFile(field, field+".txt")
@@ -120,6 +138,47 @@ func TestSend_HappyPath_SavesResolvesAndInjects(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("expected exactly 1 saved file in %s, got %v (err %v)", dir, entries, err)
+	}
+}
+
+func TestSend_ModifiedSubmit_UsesOneAtomicSendInput(t *testing.T) {
+	for _, key := range []string{"ctrl-enter", "alt-enter"} {
+		t.Run(key, func(t *testing.T) {
+			herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}}
+			h := newSendHandler(herdr, t.TempDir(), silentLogger())
+			tmpl := &artifact.Template{Segments: []artifact.Segment{{Text: "hello"}}}
+			body, ctype := buildMultipartWithSubmit(t, tmpl, "default", key, nil)
+			req := httptest.NewRequest(http.MethodPost, "/send", body)
+			req.Header.Set("Content-Type", ctype)
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			herdrKey := map[string]string{"ctrl-enter": "ctrl+enter", "alt-enter": "alt+enter"}[key]
+			want := fmt.Sprintf("default/w1:p1 [%s]: hello", herdrKey)
+			if len(herdr.calls) != 1 || herdr.calls[0] != want {
+				t.Fatalf("expected one atomic send_input %q, got %v", want, herdr.calls)
+			}
+		})
+	}
+}
+
+func TestSend_InvalidSubmitKey_Returns400BeforeInject(t *testing.T) {
+	herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}}
+	h := newSendHandler(herdr, t.TempDir(), silentLogger())
+	tmpl := &artifact.Template{Segments: []artifact.Segment{{Text: "hello"}}}
+	body, ctype := buildMultipartWithSubmit(t, tmpl, "default", "shift-enter", nil)
+	req := httptest.NewRequest(http.MethodPost, "/send", body)
+	req.Header.Set("Content-Type", ctype)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest || len(herdr.calls) != 0 {
+		t.Fatalf("expected 400 and no inject, got %d and %v", rec.Code, herdr.calls)
 	}
 }
 

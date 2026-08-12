@@ -29,6 +29,7 @@ export interface SendFailure {
 }
 
 export type SendResult = SendSuccess | SendFailure
+export type SubmitKey = 'enter' | 'ctrl-enter' | 'alt-enter'
 
 /**
  * UploadClient is the promptbox's one seam to the network. `send` takes an
@@ -39,7 +40,7 @@ export type SendResult = SendSuccess | SendFailure
  * failure kind.
  */
 export interface UploadClient {
-  send(req: SerializedRequest, session: string): Promise<SendResult>
+  send(req: SerializedRequest, session: string, submitKey?: SubmitKey): Promise<SendResult>
 }
 
 interface sendResponseBody {
@@ -59,10 +60,11 @@ interface sendResponseBody {
  */
 export function createHttpUploadClient(): UploadClient {
   return {
-    async send(req, session) {
+    async send(req, session, submitKey = 'enter') {
       const form = new FormData()
       form.set('template', JSON.stringify(req.template))
       form.set('session', session)
+      form.set('submitKey', submitKey)
       for (const f of req.files) {
         form.set(f.fieldName, f.file, f.file.name)
       }

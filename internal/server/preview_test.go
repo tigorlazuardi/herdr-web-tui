@@ -29,6 +29,9 @@ func (f *previewHerdrClient) FocusedPane(ctx context.Context, session string) (*
 }
 
 func (f *previewHerdrClient) PaneRun(context.Context, string, string, string) error { return nil }
+func (f *previewHerdrClient) PaneSendInput(context.Context, string, string, string, string) error {
+	return nil
+}
 
 func (f *previewHerdrClient) PaneRead(ctx context.Context, session, pane string, _ int) (string, error) {
 	f.ctx, f.session, f.paneID = ctx, session, pane

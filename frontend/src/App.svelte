@@ -5,6 +5,7 @@
   // it a DOM element on mount and call close() on unmount so the ws/pty on
   // the server always tears down when the tab closes or navigates away.
   import { onDestroy, onMount } from 'svelte'
+  import { ThemeProvider } from 'sve-ui'
   import KeyBar from './components/KeyBar.svelte'
   import Topbar from './components/Topbar.svelte'
   import PanePreview from './components/PanePreview.svelte'
@@ -71,6 +72,7 @@
   })
 </script>
 
+<ThemeProvider colorScheme="dark">
 <main>
   <!-- Layout A (mobile-ux-v2.md): topbar → terminal (flex:1) → promptbox →
        accessory rail → soft keyboard, top to bottom,
@@ -97,6 +99,7 @@
     <KeyBar {bridge} {sticky} />
   {/if}
 </main>
+</ThemeProvider>
 
 <style>
   main {

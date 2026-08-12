@@ -13,19 +13,22 @@ to an operator to find the matching log lines.
 ## `POST /send` — artifact inject
 
 Implementation: `internal/server/send.go`. Atomic, all-or-nothing: save every
-uploaded file → resolve the template into one string → one
-`herdr pane run` call. There is no rollback logic — the fixed ordering itself
+uploaded file → resolve the template into one string → one final Herdr
+mutation. Plain Enter uses `herdr pane run`; modified submits use one atomic
+`pane.send_input` socket request containing both text and key. There is no
+rollback logic — the fixed ordering itself
 is what makes a partial inject impossible: nothing is typed into any pane
 until every file referenced by the template has already been saved.
 
 **Content-Type:** `multipart/form-data`. The handler streams the multipart
 reader field-by-field (never buffers a whole upload in memory) and recognizes
-three kinds of parts:
+four kinds of parts:
 
 | Form field name | Kind | Required | Meaning |
 |---|---|---|---|
 | `template` | JSON | yes | `{"segments": [...]}` — see below. |
 | `session` | text | no | Herdr session name; sanitized to `[a-zA-Z0-9-]`, falls back to `default`. |
+| `submitKey` | text | no | `enter`, `ctrl-enter`, or `alt-enter`; absent remains backward-compatible `enter`. |
 | *(anything else)* | binary file | as referenced | A file the template's segments reference by this field name. |
 
 **`template` shape** (`internal/artifact/template.go`):
@@ -49,18 +52,21 @@ index. Server-side, each file is saved to
 that path (`internal/artifact.Resolve`) — the browser never sees the staged
 path.
 
-Once resolved into one string, the server does exactly one
-`herdr --session <session> pane current` (find the focused pane) then one
-`herdr --session <session> pane run <pane> <resolved-text>` (type + Enter,
-atomic).
+Once resolved into one string, server resolves focused pane exactly once.
+`enter` then uses one `herdr --session <session> pane run` mutation. Modified
+submits resolve named-session socket through validated `herdr status server
+--json`, accept only reviewed protocol 16/17 envelopes, then send exactly one
+`pane.send_input` mutation with resolved `text` and `keys:["ctrl+enter"]` or
+`["alt+enter"]`. Unknown protocol or response shape fails closed. Sequential
+send-text then send-keys is never used.
 
 **Response:** `application/json`, always shaped `{"ok": bool, "error"?: string}`.
 
 | Status | When |
 |---|---|
 | `200` | `{"ok": true}` — inject succeeded. |
-| `400` | Malformed multipart, missing `template` field, bad template JSON, or `herdr pane current` reports no such session (a syntactically valid but non-existent session — treated as a client mistake, since it's the first herdr call in the flow). |
-| `500` | I/O error saving a file, `herdr` unreachable at all (binary missing / can't spawn), or `herdr pane run` itself failed after the session was already proven to resolve a focused pane. |
+| `400` | Malformed multipart, missing `template` field, bad template JSON, invalid `submitKey`, or `herdr pane current` reports no such session (a syntactically valid but non-existent session — treated as a client mistake, since it's the first herdr call in the flow). |
+| `500` | I/O error saving a file, `herdr` unreachable at all (binary missing / can't spawn), or final Herdr mutation failure (`pane run` or `pane.send_input`, including socket/protocol failures) after the session was already proven to resolve a focused pane. |
 
 ### I/O examples
 
@@ -78,6 +84,10 @@ Content-Type: application/json
 Content-Disposition: form-data; name="session"
 
 work
+--X
+Content-Disposition: form-data; name="submitKey"
+
+ctrl-enter
 --X
 Content-Disposition: form-data; name="upload-1"; filename="x.png"
 Content-Type: image/png

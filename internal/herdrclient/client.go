@@ -1,11 +1,16 @@
 package herdrclient
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -51,11 +56,13 @@ type HerdrClient interface {
 
 	// PaneRun types text into pane and submits it (text + Enter) as one
 	// atomic action — Herdr's `pane run`, verified live to keep paths with
-	// slashes/spaces intact. This is the inject primitive /send's atomic
-	// flow ends on: save all files, resolve all markers, then this one
-	// call. If this call fails, nothing was typed (see doc comment on the
-	// /send handler for the full ordering invariant).
+	// slashes/spaces intact.
 	PaneRun(ctx context.Context, session, pane, text string) error
+
+	// PaneSendInput performs one raw socket pane.send_input mutation containing
+	// both text and the modified submit key. Sequential text/key calls are never
+	// used because they could partially inject on failure.
+	PaneSendInput(ctx context.Context, session, pane, text, key string) error
 
 	// PaneRead returns raw visible text for the focused-pane browser preview,
 	// up to lines lines (0 = herdr's default).
@@ -109,6 +116,111 @@ func (c *ExecHerdrClient) FocusedPane(ctx context.Context, session string) (*Pan
 func (c *ExecHerdrClient) PaneRun(ctx context.Context, session, pane, text string) error {
 	_, err := run(ctx, c.logger, session, "pane", "run", pane, text)
 	return err
+}
+
+type serverStatus struct {
+	Running  bool    `json:"running"`
+	Protocol *uint32 `json:"protocol"`
+	Socket   string  `json:"socket"`
+}
+
+type socketResponse struct {
+	ID     string `json:"id"`
+	Result *struct {
+		Type string `json:"type"`
+	} `json:"result,omitempty"`
+	Error *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// parseServerStatus validates only reviewed protocol 16/17 status envelopes.
+// Both versions share the consumed status and pane.send_input shapes; newer
+// protocols fail closed until their schema and a full-path fixture are reviewed.
+func parseServerStatus(out []byte) (serverStatus, error) {
+	var status serverStatus
+	if err := json.Unmarshal(out, &status); err != nil {
+		return status, errors.Wrap(err, "parse herdr server status")
+	}
+	if !status.Running || status.Protocol == nil || status.Socket == "" {
+		return status, errors.New("herdr session is not running or status is incomplete")
+	}
+	if *status.Protocol != 16 && *status.Protocol != 17 {
+		return status, fmt.Errorf("unsupported herdr protocol %d", *status.Protocol)
+	}
+	if !filepath.IsAbs(status.Socket) {
+		return status, errors.New("herdr status returned a non-absolute socket path")
+	}
+	return status, nil
+}
+
+// PaneSendInput resolves the named session through Herdr itself, then sends one
+// newline-delimited request over its Unix socket. Socket path and protocol come
+// from validated status output rather than HERDR_SOCKET_PATH, which may point at
+// another session when this service handles multiple URL sessions.
+func (c *ExecHerdrClient) PaneSendInput(ctx context.Context, session, pane, text, key string) error {
+	if key != "ctrl+enter" && key != "alt+enter" {
+		return fmt.Errorf("unsupported pane.send_input key %q", key)
+	}
+	out, err := run(ctx, c.logger, session, "status", "server", "--json")
+	if err != nil {
+		return err
+	}
+	status, err := parseServerStatus(out)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(status.Socket)
+	if err != nil {
+		return errors.Wrap(err, "stat herdr session socket")
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return errors.New("herdr status path is not a Unix socket")
+	}
+
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", status.Socket)
+	if err != nil {
+		return errors.Wrap(err, "connect to herdr session socket")
+	}
+	defer conn.Close()
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+
+	const requestID = "herdr-web-tui-send"
+	request := struct {
+		ID     string `json:"id"`
+		Method string `json:"method"`
+		Params struct {
+			PaneID string   `json:"pane_id"`
+			Text   string   `json:"text"`
+			Keys   []string `json:"keys"`
+		} `json:"params"`
+	}{ID: requestID, Method: "pane.send_input"}
+	request.Params.PaneID = pane
+	request.Params.Text = text
+	request.Params.Keys = []string{key}
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return errors.Wrap(err, "write pane.send_input request")
+	}
+
+	var response socketResponse
+	if err := json.NewDecoder(io.LimitReader(bufio.NewReaderSize(conn, 64*1024), 64*1024)).Decode(&response); err != nil {
+		return errors.Wrap(err, "read pane.send_input response")
+	}
+	if response.ID != requestID {
+		return errors.New("pane.send_input response id mismatch")
+	}
+	if response.Error != nil {
+		return fmt.Errorf("herdr socket error %s: %s", response.Error.Code, response.Error.Message)
+	}
+	if response.Result == nil || response.Result.Type != "ok" {
+		return errors.New("pane.send_input response missing reviewed ok shape")
+	}
+	return nil
 }
 
 func (c *ExecHerdrClient) PaneRead(ctx context.Context, session, pane string, lines int) (string, error) {

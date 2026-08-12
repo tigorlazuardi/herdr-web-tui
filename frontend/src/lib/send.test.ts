@@ -7,8 +7,8 @@ function fakeClient(result: SendResult): UploadClient & { calls: unknown[] } {
   const calls: unknown[] = []
   return {
     calls,
-    async send(req, session) {
-      calls.push({ req, session })
+    async send(req, session, submitKey) {
+      calls.push({ req, session, submitKey })
       return result
     },
   }
@@ -22,7 +22,24 @@ describe('sendSegments', () => {
 
     expect(result).toEqual({ ok: true })
     expect(client.calls).toEqual([
-      { req: { template: { segments: [{ text: 'hello' }] }, files: [] }, session: 'work' },
+      {
+        req: { template: { segments: [{ text: 'hello' }] }, files: [] },
+        session: 'work',
+        submitKey: 'enter',
+      },
+    ])
+  })
+
+  it('forwards alternate submit without changing serialized prompt', async () => {
+    const client = fakeClient({ ok: true })
+    await sendSegments(client, [{ kind: 'text', text: 'hello' }], 'work', 'ctrl-enter')
+
+    expect(client.calls).toEqual([
+      {
+        req: { template: { segments: [{ text: 'hello' }] }, files: [] },
+        session: 'work',
+        submitKey: 'ctrl-enter',
+      },
     ])
   })
 

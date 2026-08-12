@@ -8,7 +8,7 @@
  * behaviour is secondary/higher-effort, left to component/e2e tooling).
  */
 import { serialize, type Segment } from './segments'
-import type { SendResult, UploadClient } from './transport'
+import type { SendResult, SubmitKey, UploadClient } from './transport'
 
 /**
  * sendSegments never throws: every UploadClient failure (network, 4xx, 5xx)
@@ -22,6 +22,7 @@ export function sendSegments(
   client: UploadClient,
   segments: readonly Segment[],
   session: string,
+  submitKey: SubmitKey = 'enter',
 ): Promise<SendResult> {
-  return client.send(serialize(segments), session)
+  return client.send(serialize(segments), session, submitKey)
 }

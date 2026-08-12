@@ -35,6 +35,14 @@ type sendHandler struct {
 	logger     *slog.Logger
 }
 
+type submitKey string
+
+const (
+	submitEnter     submitKey = "enter"
+	submitCtrlEnter submitKey = "ctrl-enter"
+	submitAltEnter  submitKey = "alt-enter"
+)
+
 // newSendHandler wires a sendHandler. stagingDir is the flat directory
 // uploaded files are saved into (production: artifact.DefaultDir's result;
 // tests: t.TempDir()).
@@ -47,7 +55,7 @@ func newSendHandler(herdr herdrclient.HerdrClient, stagingDir string, logger *sl
 // ordering alone makes a partial inject impossible:
 //
 //  1. Parse the multipart request: the "template" field (JSON-encoded
-//     artifact.Template) and the "session" field.
+//     artifact.Template), "session", and optional validated "submitKey" field.
 //  2. Save phase — every file field the template references is written to
 //     stagingDir. The first save error aborts here, before anything has
 //     been typed into any pane; files already saved for this request are
@@ -55,8 +63,8 @@ func newSendHandler(herdr herdrclient.HerdrClient, stagingDir string, logger *sl
 //     the design doc's storage-namespace decision).
 //  3. Resolve phase — pure, in-memory: substitute each file marker for its
 //     saved path (artifact.Resolve). The client never sees these paths.
-//  4. Inject phase — exactly one HerdrClient.FocusedPane + one
-//     HerdrClient.PaneRun. This is the single last step: if it fails,
+//  4. Inject phase — exactly one HerdrClient.FocusedPane query + one final
+//     PaneRun (Enter) or PaneSendInput (modified Enter) mutation. If it fails,
 //     nothing was typed, by construction (nothing before it touches the
 //     pane at all).
 //
@@ -83,7 +91,7 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl, session, saved, fileCount, err := readParts(mr, h.stagingDir)
+	tmpl, session, key, saved, fileCount, err := readParts(mr, h.stagingDir)
 	if err != nil {
 		h.logger.WarnContext(ctx, "send: request parse/save failed", slog.String("error", err.Error()))
 		writeSendError(w, statusFor(err), err.Error())
@@ -93,6 +101,7 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.InfoContext(ctx, "send: upload received",
 		slog.String("session", session),
+		slog.String("submit_key", string(key)),
 		slog.Int("file_count", fileCount),
 	)
 
@@ -118,11 +127,17 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.herdr.PaneRun(ctx, session, pane.PaneID, text)
+	if key == submitEnter {
+		err = h.herdr.PaneRun(ctx, session, pane.PaneID, text)
+	} else {
+		herdrKey := map[submitKey]string{submitCtrlEnter: "ctrl+enter", submitAltEnter: "alt+enter"}[key]
+		err = h.herdr.PaneSendInput(ctx, session, pane.PaneID, text, herdrKey)
+	}
 	duration := time.Since(start)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "send: inject failed",
 			slog.String("session", session), slog.String("pane", pane.PaneID),
+			slog.String("submit_key", string(key)),
 			slog.Duration("duration", duration), slog.String("error", err.Error()),
 		)
 		writeSendError(w, http.StatusInternalServerError, "inject failed: "+err.Error())
@@ -131,20 +146,22 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.InfoContext(ctx, "send: inject ok",
 		slog.String("session", session), slog.String("pane", pane.PaneID),
-		slog.Duration("duration", duration),
+		slog.String("submit_key", string(key)), slog.Duration("duration", duration),
 	)
 	writeJSON(w, http.StatusOK, sendResponse{OK: true})
 }
 
 // readParts consumes every multipart part exactly once (a multipart.Reader
-// is forward-only): the "template" and "session" form fields, and every
+// is forward-only): the "template", "session", and optional "submitKey"
+// form fields, and every
 // file part named in the template's segments, saving each to dir as it is
 // streamed off the wire (never buffering a whole upload in memory). It
 // returns the parsed template, the raw session field value, a map from
 // form field name to saved path (Resolve's input), and how many files were
 // saved (for the upload-received log line).
-func readParts(mr *multipart.Reader, dir string) (tmpl artifact.Template, session string, saved map[string]string, fileCount int, err error) {
+func readParts(mr *multipart.Reader, dir string) (tmpl artifact.Template, session string, key submitKey, saved map[string]string, fileCount int, err error) {
 	saved = map[string]string{}
+	key = submitEnter
 	haveTemplate := false
 
 	for {
@@ -153,7 +170,7 @@ func readParts(mr *multipart.Reader, dir string) (tmpl artifact.Template, sessio
 			break
 		}
 		if err != nil {
-			return tmpl, session, saved, fileCount, badRequestf("read multipart part: %s", err)
+			return tmpl, session, key, saved, fileCount, badRequestf("read multipart part: %s", err)
 		}
 
 		name := part.FormName()
@@ -161,13 +178,24 @@ func readParts(mr *multipart.Reader, dir string) (tmpl artifact.Template, sessio
 		case name == "template":
 			if err := json.NewDecoder(part).Decode(&tmpl); err != nil {
 				part.Close()
-				return tmpl, session, saved, fileCount, badRequestf("decode template field: %s", err)
+				return tmpl, session, key, saved, fileCount, badRequestf("decode template field: %s", err)
 			}
 			haveTemplate = true
 		case name == "session":
 			buf := make([]byte, 256)
 			n, _ := part.Read(buf)
 			session = string(buf[:n])
+		case name == "submitKey":
+			buf, readErr := io.ReadAll(io.LimitReader(part, 32))
+			if readErr != nil {
+				part.Close()
+				return tmpl, session, key, saved, fileCount, badRequestf("read submitKey field: %s", readErr)
+			}
+			key = submitKey(buf)
+			if key != submitEnter && key != submitCtrlEnter && key != submitAltEnter {
+				part.Close()
+				return tmpl, session, key, saved, fileCount, badRequestf("invalid submitKey %q", key)
+			}
 		default:
 			// Any other named part is a file attachment referenced by a
 			// template segment's File field (the form field name).
@@ -182,7 +210,7 @@ func readParts(mr *multipart.Reader, dir string) (tmpl artifact.Template, sessio
 			if saveErr != nil {
 				// I/O failure staging a file is a server-side fault, not a
 				// client mistake.
-				return tmpl, session, saved, fileCount, internalf("save %q: %s", name, saveErr)
+				return tmpl, session, key, saved, fileCount, internalf("save %q: %s", name, saveErr)
 			}
 			saved[name] = path
 			fileCount++
@@ -192,9 +220,9 @@ func readParts(mr *multipart.Reader, dir string) (tmpl artifact.Template, sessio
 	}
 
 	if !haveTemplate {
-		return tmpl, session, saved, fileCount, badRequestf("missing required \"template\" field")
+		return tmpl, session, key, saved, fileCount, badRequestf("missing required \"template\" field")
 	}
-	return tmpl, session, saved, fileCount, nil
+	return tmpl, session, key, saved, fileCount, nil
 }
 
 // clientlogRequest is the JSON body POST /clientlog accepts: a frontend

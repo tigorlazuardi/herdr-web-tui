@@ -11,7 +11,7 @@ let
     pname = "herdr-web-tui-frontend";
     version = "0.6.1";
     src = ../frontend;
-    npmDepsHash = "sha256-zawsI5mDniWIH2GzuDGTgWufwXM58VYgY7mnA2u/jWw=";
+    npmDepsHash = "sha256-+t08V+kDGsefqFQPrrhsQQ1oUgf6hEZpuebMKlC+6Oc=";
     installPhase = ''
       runHook preInstall
       cp -r dist $out
