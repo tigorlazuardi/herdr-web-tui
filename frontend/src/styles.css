@@ -40,6 +40,13 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#app,
+#app > .sve-theme {
+  height: 100%;
+}
+
 body {
   margin: 0;
 }

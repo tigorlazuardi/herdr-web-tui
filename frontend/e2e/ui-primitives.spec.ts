@@ -37,6 +37,16 @@ test('Toolbar ArrowRight reaches enabled Push and operable mode Toggle in visual
   await expect(mode).toContainText('Rail')
 })
 
+test('promptbox stays inside initial app viewport before terminal interaction', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await page.addStyleTag({ content: 'html { height: 744px !important; }' })
+
+  const appBottom = await page.locator('html').evaluate((element) => element.getBoundingClientRect().bottom)
+  const promptBottom = await page.locator('.promptbox').evaluate((element) => element.getBoundingClientRect().bottom)
+  expect(promptBottom).toBeCloseTo(appBottom, 0)
+})
+
 test('pane preview uses modal dialog Escape behavior', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Preview focused pane' }).click()

@@ -105,7 +105,9 @@
   main {
     display: flex;
     flex-direction: column;
-    height: 100dvh;
+    /* ponytail: inherit actual app viewport instead of 100dvh; Android
+       standalone can initially count system-bar space in dvh until first tap. */
+    height: 100%;
     background: #000;
     /* No accidental pull-to-refresh reload on a phone: a downward drag at
        the top of the terminal must reach xterm's scrollback, not the
