@@ -2,10 +2,55 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestShutdownHTTPServer_TimeoutForceClosesActiveRequest(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	testServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-r.Context().Done()
+		close(requestCanceled)
+	}))
+	testServer.Start()
+	t.Cleanup(testServer.Close)
+
+	requestDone := make(chan error, 1)
+	go func() {
+		response, err := http.Get(testServer.URL)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, response.Body)
+			err = response.Body.Close()
+		}
+		requestDone <- err
+	}()
+	<-requestStarted
+
+	started := time.Now()
+	forced, err := shutdownHTTPServer(testServer.Config, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("shutdownHTTPServer: %v", err)
+	}
+	if !forced {
+		t.Fatal("shutdown unexpectedly remained graceful with an active request")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("forced shutdown took %s", elapsed)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("active request remained connected after shutdown timeout")
+	}
+	<-requestDone
+}
 
 func TestLoadPushLogsRedactedStructuredFailures(t *testing.T) {
 	tests := []struct {

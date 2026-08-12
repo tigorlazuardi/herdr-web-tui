@@ -99,13 +99,29 @@ func run() error {
 		}
 	case <-ctx.Done():
 		log.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			return errors.Wrap(err, "shutdown")
+		forced, err := shutdownHTTPServer(srv, 2*time.Second)
+		if err != nil {
+			return err
+		}
+		if forced {
+			log.Warn("graceful shutdown timed out; closed active connections")
 		}
 	}
 	return nil
+}
+
+// shutdownHTTPServer waits for active HTTP requests until timeout, then closes
+// remaining connections so a client cannot indefinitely block process exit.
+func shutdownHTTPServer(srv *http.Server, timeout time.Duration) (bool, error) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		if closeErr := srv.Close(); closeErr != nil {
+			return true, errors.Wrap(closeErr, "force close HTTP server after shutdown timeout")
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // loadPush validates configuration and opens persistence before network readiness, logging redacted structured failure details.
