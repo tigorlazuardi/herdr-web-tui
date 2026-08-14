@@ -45,6 +45,32 @@ describe('holdPWAScreenAwake', () => {
     expect(locks[1].released).toBe(true)
   })
 
+  test('reacquires when the old lock releases after visibility already returned', async () => {
+    const documentEvents = new EventTarget()
+    const fakeDocument = {
+      visibilityState: 'visible',
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
+    }
+    const lockEvents = new EventTarget()
+    const lock = {
+      addEventListener: lockEvents.addEventListener.bind(lockEvents),
+      release: vi.fn(),
+    }
+    const request = vi.fn().mockResolvedValue(lock)
+    vi.stubGlobal('document', fakeDocument)
+    vi.stubGlobal('navigator', { wakeLock: { request } })
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+
+    holdPWAScreenAwake(vi.fn())
+    await flush()
+    documentEvents.dispatchEvent(new Event('visibilitychange'))
+    lockEvents.dispatchEvent(new Event('release'))
+    await flush()
+
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
   test('does nothing outside standalone display mode', () => {
     const request = vi.fn()
     vi.stubGlobal('navigator', { wakeLock: { request } })

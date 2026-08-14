@@ -20,7 +20,11 @@ export function holdPWAScreenAwake(onUnavailable: (unavailable: boolean) => void
       }
       lock = next
       onUnavailable(false)
-      next.addEventListener('release', () => lock === next && (lock = undefined), { once: true })
+      next.addEventListener('release', () => {
+        if (lock !== next) return
+        lock = undefined
+        void acquire()
+      }, { once: true })
     } catch {
       onUnavailable(true)
     } finally {
