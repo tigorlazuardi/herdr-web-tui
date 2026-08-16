@@ -28,12 +28,12 @@ describe('holdPWAScreenAwake', () => {
     vi.stubGlobal('document', fakeDocument)
     vi.stubGlobal('navigator', { wakeLock: { request } })
     vi.stubGlobal('matchMedia', () => ({ matches: true }))
-    const onUnavailable = vi.fn()
+    const onStatus = vi.fn()
 
-    const cleanup = holdPWAScreenAwake(onUnavailable)
+    const cleanup = holdPWAScreenAwake(onStatus)
     await flush()
     expect(request).toHaveBeenCalledTimes(1)
-    expect(onUnavailable).toHaveBeenLastCalledWith(false)
+    expect(onStatus).toHaveBeenLastCalledWith({ state: 'active', message: 'Screen stays awake' })
 
     await locks[0].release()
     documentEvents.dispatchEvent(new Event('visibilitychange'))
@@ -83,9 +83,9 @@ describe('holdPWAScreenAwake', () => {
   test('reports missing wake-lock support in standalone mode', () => {
     vi.stubGlobal('navigator', {})
     vi.stubGlobal('matchMedia', () => ({ matches: true }))
-    const onUnavailable = vi.fn()
+    const onStatus = vi.fn()
 
-    holdPWAScreenAwake(onUnavailable)()
-    expect(onUnavailable).toHaveBeenCalledWith(true)
+    holdPWAScreenAwake(onStatus)()
+    expect(onStatus).toHaveBeenCalledWith({ state: 'unavailable', message: 'Screen Wake Lock unsupported' })
   })
 })

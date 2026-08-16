@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('Toolbar ArrowRight reaches enabled Push and operable mode Toggle in visual order', async ({ page }) => {
+test('Toolbar ArrowRight follows compact controls in visual order', async ({ page }) => {
   await page.addInitScript(() => {
     const subscription = { endpoint: 'https://push.example/current' }
     const registration = { pushManager: { getSubscription: async () => subscription } }
@@ -17,15 +17,14 @@ test('Toolbar ArrowRight reaches enabled Push and operable mode Toggle in visual
 
   const decrease = page.getByRole('button', { name: 'Decrease font size' })
   const increase = page.getByRole('button', { name: 'Increase font size' })
-  const push = page.getByRole('button', { name: 'Push on' })
   const preview = page.getByRole('button', { name: 'Preview focused pane' })
   const mode = page.getByRole('button', { name: /Input mode:/ })
-  await expect(push).toBeEnabled()
-  await decrease.focus()
+  const menu = page.getByRole('button', { name: 'Open app menu' })
+  await menu.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(decrease).toBeFocused()
   await page.keyboard.press('ArrowRight')
   await expect(increase).toBeFocused()
-  await page.keyboard.press('ArrowRight')
-  await expect(push).toBeFocused()
   await page.keyboard.press('ArrowRight')
   await expect(preview).toBeFocused()
   await page.keyboard.press('ArrowRight')
@@ -35,6 +34,15 @@ test('Toolbar ArrowRight reaches enabled Push and operable mode Toggle in visual
   await page.keyboard.press('Space')
   await expect(mode).toHaveAttribute('aria-pressed', 'true')
   await expect(mode).toContainText('Rail')
+})
+
+test('app menu exposes push and PWA status outside compact toolbar', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open app menu' }).click()
+  await expect(page.getByRole('button', { name: /Push (on|off)/ })).toBeVisible()
+  await page.getByRole('button', { name: 'PWA permissions' }).click()
+  await expect(page.getByRole('dialog', { name: 'App menu' })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'PWA status' })).toBeVisible()
 })
 
 test('promptbox stays inside initial app viewport before terminal interaction', async ({ page }) => {
@@ -55,4 +63,16 @@ test('pane preview uses modal dialog Escape behavior', async ({ page }) => {
 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
+})
+
+test('pane preview makes detected URLs directly navigable', async ({ page }) => {
+  await page.route('**/api/pane-preview/*', (route) =>
+    route.fulfill({ json: { text: 'Server live: http://192.168.100.5:3002.' } }),
+  )
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Preview focused pane' }).click()
+
+  const link = page.getByRole('link', { name: 'http://192.168.100.5:3002' })
+  await expect(link).toHaveAttribute('href', 'http://192.168.100.5:3002')
+  await expect(link).toHaveAttribute('target', '_blank')
 })

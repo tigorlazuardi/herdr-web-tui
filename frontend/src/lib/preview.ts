@@ -1,4 +1,4 @@
-/** Fresh focused-pane preview transport. Raw text is deliberately not parsed or rendered. */
+/** Fresh focused-pane preview transport. */
 export interface PreviewSuccess {
   readonly ok: true
   readonly text: string
@@ -17,6 +17,32 @@ export interface PanePreviewClient {
 }
 
 type Fetcher = typeof fetch
+
+export interface PreviewTextSegment {
+  readonly text: string
+  readonly href?: string
+}
+
+/** Splits plain terminal text into safe HTTP(S) links while preserving every character. */
+export function splitPreviewLinks(text: string): PreviewTextSegment[] {
+  const segments: PreviewTextSegment[] = []
+  const urlPattern = /https?:\/\/[^\s<>"']+/gi
+  let cursor = 0
+
+  for (const match of text.matchAll(urlPattern)) {
+    const start = match.index
+    const raw = match[0]
+    // ponytail: trim common prose punctuation; add OSC 8 parsing if terminal-native hyperlinks become required.
+    const href = raw.replace(/[),.;:!?\]}]+$/, '')
+    if (start > cursor) segments.push({ text: text.slice(cursor, start) })
+    segments.push({ text: href, href })
+    if (href.length < raw.length) segments.push({ text: raw.slice(href.length) })
+    cursor = start + raw.length
+  }
+
+  if (cursor < text.length) segments.push({ text: text.slice(cursor) })
+  return segments
+}
 
 /** Uses URL-path session routing; every call is one uncached browser request. */
 export function createPanePreviewClient(fetcher: Fetcher = fetch): PanePreviewClient {

@@ -1,7 +1,15 @@
-export function holdPWAScreenAwake(onUnavailable: (unavailable: boolean) => void): () => void {
-  if (!matchMedia('(display-mode: standalone)').matches) return () => {}
+export interface WakeLockStatus {
+  readonly state: 'active' | 'inactive' | 'unavailable'
+  readonly message: string
+}
+
+export function holdPWAScreenAwake(onStatus: (status: WakeLockStatus) => void): () => void {
+  if (!matchMedia('(display-mode: standalone)').matches) {
+    onStatus({ state: 'inactive', message: 'Available in installed PWA only' })
+    return () => {}
+  }
   if (!('wakeLock' in navigator)) {
-    onUnavailable(true)
+    onStatus({ state: 'unavailable', message: 'Screen Wake Lock unsupported' })
     return () => {}
   }
 
@@ -19,19 +27,29 @@ export function holdPWAScreenAwake(onUnavailable: (unavailable: boolean) => void
         return
       }
       lock = next
-      onUnavailable(false)
+      onStatus({ state: 'active', message: 'Screen stays awake' })
       next.addEventListener('release', () => {
         if (lock !== next) return
         lock = undefined
-        void acquire()
+        onStatus({ state: 'inactive', message: 'Wake lock released; reacquiring…' })
+        queueMicrotask(() => void acquire())
       }, { once: true })
-    } catch {
-      onUnavailable(true)
+    } catch (error) {
+      onStatus({
+        state: 'unavailable',
+        message: `Wake lock failed: ${error instanceof Error ? error.message : String(error)}`,
+      })
     } finally {
       pending = false
     }
   }
-  const onVisibilityChange = () => void acquire()
+  const onVisibilityChange = () => {
+    if (document.visibilityState !== 'visible') {
+      onStatus({ state: 'inactive', message: 'Wake lock paused while app is hidden' })
+      return
+    }
+    void acquire()
+  }
 
   document.addEventListener('visibilitychange', onVisibilityChange)
   void acquire()

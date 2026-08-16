@@ -2,7 +2,7 @@
   import X from '@lucide/svelte/icons/x'
   import Copy from '@lucide/svelte/icons/copy'
   import { Button, Dialog } from 'sve-ui'
-  import { createPanePreviewClient } from '../lib/preview'
+  import { createPanePreviewClient, splitPreviewLinks } from '../lib/preview'
   import { sessionFromPath } from '../lib/session'
 
   const client = createPanePreviewClient()
@@ -79,8 +79,7 @@
       {:else if text === ''}
         <p class="message">Focused pane has no visible text.</p>
       {:else}
-        <!-- ponytail: native pre keeps raw selection/copy. Add formatter only if semantic rendering becomes required. -->
-        <pre aria-label="Focused pane text">{text}</pre>
+        <pre aria-label="Focused pane text">{#each splitPreviewLinks(text) as segment}{#if segment.href}<a href={segment.href} target="_blank" rel="noopener noreferrer">{segment.text}</a>{:else}{segment.text}{/if}{/each}</pre>
       {/if}
 
       <footer>
@@ -114,6 +113,8 @@
   :global(.pane-preview .sve-dialog-title) { color: #f5f5f4; font-size: 1.1rem; }
   :global(.pane-preview .sve-dialog-description), .message, .copy-status { font: 0.85rem/1.4 system-ui, sans-serif; color: #d6d3d1; }
   pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 1.25rem; white-space: pre-wrap; overflow-wrap: normal; tab-size: 4; user-select: text; font: 0.85rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre a { color: #7dd3fc; text-decoration: underline; text-underline-offset: 0.15em; }
+  pre a:hover { color: #bae6fd; }
   .message { padding: 1.5rem 1.25rem; }
   .error { color: #fca5a5; }
   footer { justify-content: space-between; border-top: 1px solid #44403c; }

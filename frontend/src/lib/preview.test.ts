@@ -1,5 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createPanePreviewClient } from './preview'
+import { createPanePreviewClient, splitPreviewLinks } from './preview'
+
+describe('splitPreviewLinks', () => {
+  it('links HTTP URLs without swallowing sentence punctuation', () => {
+    const text = 'Open http://192.168.100.5:3002. Then https://example.com/a?q=1!'
+    const segments = splitPreviewLinks(text)
+
+    expect(segments.map((segment) => segment.text).join('')).toBe(text)
+    expect(segments.filter((segment) => segment.href)).toEqual([
+      { text: 'http://192.168.100.5:3002', href: 'http://192.168.100.5:3002' },
+      { text: 'https://example.com/a?q=1', href: 'https://example.com/a?q=1' },
+    ])
+  })
+
+  it('leaves non-HTTP schemes as plain text', () => {
+    expect(splitPreviewLinks('ssh://host file:///tmp/a')).toEqual([{ text: 'ssh://host file:///tmp/a' }])
+  })
+})
 
 describe('createPanePreviewClient', () => {
   it('uses URL-path session and returns raw text', async () => {
