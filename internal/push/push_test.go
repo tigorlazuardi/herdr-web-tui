@@ -843,13 +843,13 @@ func TestFocusAPIRejectsMissingPaneBeforeFocus(t *testing.T) {
 func TestRunEventsOnceRejectsInvalidSeedSnapshot(t *testing.T) {
 	validShape := `{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}`
 	for name, response := range map[string]string{
-		"wrong ID":       `{"id":"other","result":` + validShape + `}`,
-		"error envelope": `{"id":"push-snapshot","error":{"code":-1}}`,
-		"missing result": `{"id":"push-snapshot"}`,
-		"malformed":      `{`,
-		"wrong type":     `{"id":"push-snapshot","result":{"type":"ok"}}`,
-		"wrong protocol": `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":15,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`,
-		"missing panes":  `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"layouts":[],"agents":[]}}}`,
+		"wrong ID":         `{"id":"other","result":` + validShape + `}`,
+		"error envelope":   `{"id":"push-snapshot","error":{"code":-1}}`,
+		"missing result":   `{"id":"push-snapshot"}`,
+		"malformed":        `{`,
+		"wrong type":       `{"id":"push-snapshot","result":{"type":"ok"}}`,
+		"unknown protocol": `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":20,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`,
+		"missing panes":    `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"layouts":[],"agents":[]}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc, _ := testService(t)
@@ -925,7 +925,7 @@ func TestRunEventsOnceIgnoresStalePaneReplayAndResnapshotsNewPane(t *testing.T) 
 			_, _ = io.WriteString(server, response+"\n")
 		}
 	}
-	go serve(snapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":17,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","agent_status":"working"}],"layouts":[],"agents":[]}}}`)
+	go serve(snapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":19,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","agent_status":"working"}],"layouts":[],"agents":[]}}}`)
 	go serve(staleServer, `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1"}],"layouts":[],"agents":[]}}}`)
 	go serve(newServer, `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1"},{"pane_id":"p2"}],"layouts":[],"agents":[]}}}`)
 	go func() {

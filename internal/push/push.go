@@ -525,7 +525,7 @@ func validPaneID(id string) bool {
 	return true
 }
 
-// focus validates trusted notification input, verifies pane existence, then focuses through protocol-16 socket API.
+// focus validates trusted notification input, verifies pane existence, then focuses through the reviewed Herdr socket API.
 func (s *Service) focus(w http.ResponseWriter, r *http.Request) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
@@ -621,7 +621,7 @@ func validSessionSnapshot(s focusSnapshotResult) bool {
 		return false
 	}
 	// ponytail: accept only schema-reviewed Herdr protocols; add future versions after compatibility review.
-	protocolSupported := *s.Snapshot.Protocol == 16 || *s.Snapshot.Protocol == 17
+	protocolSupported := *s.Snapshot.Protocol == 16 || *s.Snapshot.Protocol == 17 || *s.Snapshot.Protocol == 19
 	return s.Type == "session_snapshot" && s.Snapshot.Version != nil && protocolSupported && s.Snapshot.Workspaces != nil && s.Snapshot.Tabs != nil && s.Snapshot.Panes != nil && s.Snapshot.Layouts != nil && s.Snapshot.Agents != nil
 }
 
@@ -661,7 +661,7 @@ func readHerdrResponse(scan *bufio.Scanner, expectedID string, result any) error
 	return nil
 }
 
-// herdrRoundTrip owns one protocol-16 connection for exactly one request and response.
+// herdrRoundTrip owns one Herdr socket connection for exactly one request and response.
 func (s *Service) herdrRoundTrip(ctx context.Context, path, phase string, request herdrRequest, result any) error {
 	raw, err := s.dial(ctx, "unix", path)
 	if err != nil {
@@ -689,7 +689,7 @@ func (s *Service) herdrRoundTrip(ctx context.Context, path, phase string, reques
 	return nil
 }
 
-// focusPane verifies pane existence, then focuses it over a fresh protocol-16 connection.
+// focusPane verifies pane existence, then focuses it over a fresh reviewed-protocol connection.
 func (s *Service) focusPane(ctx context.Context, paneID string) error {
 	path := s.socketPath
 	if path == "" {
