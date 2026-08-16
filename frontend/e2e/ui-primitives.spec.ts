@@ -36,12 +36,17 @@ test('Toolbar ArrowRight follows compact controls in visual order', async ({ pag
   await expect(mode).toContainText('Rail')
 })
 
-test('app menu exposes push and PWA status outside compact toolbar', async ({ page }) => {
+test('app menu closes on one backdrop tap and exposes PWA status', async ({ page }) => {
   await page.goto('/')
+  const menu = page.getByRole('dialog', { name: 'App menu' })
   await page.getByRole('button', { name: 'Open app menu' }).click()
   await expect(page.getByRole('button', { name: /Push (on|off)/ })).toBeVisible()
+  await page.locator('.drawer-backdrop').click({ position: { x: 380, y: 400 } })
+  await expect(menu).toBeHidden()
+
+  await page.getByRole('button', { name: 'Open app menu' }).click()
   await page.getByRole('button', { name: 'PWA permissions' }).click()
-  await expect(page.getByRole('dialog', { name: 'App menu' })).toBeHidden()
+  await expect(menu).toBeHidden()
   await expect(page.getByRole('dialog', { name: 'PWA status' })).toBeVisible()
 })
 

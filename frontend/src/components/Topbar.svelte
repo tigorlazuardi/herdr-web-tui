@@ -83,7 +83,7 @@
 
 <Dialog.Portal>
   <!-- ponytail: installed Bits UI dialog owns focus trap, Escape, and light-dismiss; CSS state transitions avoid newer Popover animation APIs. -->
-  <Dialog.Overlay forceMount class="drawer-backdrop" />
+  <Dialog.Overlay forceMount class="drawer-backdrop" onclick={() => (menuOpen = false)} />
   <Dialog.Content forceMount preventScroll={menuOpen} class="app-sidebar" aria-labelledby="app-menu-title">
     <header>
       <Dialog.Title id="app-menu-title" class="menu-title">App menu</Dialog.Title>
@@ -145,7 +145,7 @@
     display: grid;
     align-content: start;
     gap: 1rem;
-    width: min(22rem, 88vw);
+    width: min(20rem, 82vw);
     height: 100dvh;
     padding: max(1rem, env(safe-area-inset-top)) 1rem 1rem;
     border: 0;
