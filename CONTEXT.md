@@ -40,6 +40,22 @@ _Avoid_: Terminal input, chat box
 Browser-supplied file referenced from Promptbox content and made available to the target Pane.
 _Avoid_: Attachment, upload
 
+## Delivery Language
+
+**Deployment**:
+Applying a selected revision to a managed environment for runtime validation or use. A Deployment may use an untagged commit and does not publish a public version.
+_Avoid_: Release, publish
+
+**Release**:
+Publishing a versioned Herdr Web TUI revision through GitHub for downstream consumers. A Release does not imply that any managed environment changed.
+_Avoid_: Deployment, rollout
+
+**Accepted Deployment**:
+Deployment that the Owner explicitly declares satisfactory after observing its verification results. Passing technical health checks alone does not make a Deployment accepted.
+_Avoid_: Healthy Deployment, successful build
+
+## Trust Language
+
 **Owner**:
 Single trusted operator of one deployed Herdr Web TUI instance.
 _Avoid_: User, account
