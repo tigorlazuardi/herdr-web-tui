@@ -17,6 +17,8 @@
   let container: HTMLDivElement
   let connectionState = $state<ConnectionState>('connecting')
   let wakeLockStatus = $state<WakeLockStatus>({ state: 'inactive', message: 'Starting wake lock…' })
+  let wakeLockEnabled = $state(true)
+  let releaseWakeLock = () => {}
   let preview: { open: () => Promise<void> }
 
   // Shared between the terminal bridge (consulted on every soft-keyboard
@@ -47,13 +49,22 @@
       .catch(() => {})
 
     const unsubscribe = bridge.onStateChange((s) => (connectionState = s))
-    const releaseWakeLock = holdPWAScreenAwake((status) => (wakeLockStatus = status))
+    setWakeLockEnabled(true)
     bridge.attach(container)
     return () => {
       releaseWakeLock()
       unsubscribe()
     }
   })
+
+  function setWakeLockEnabled(enabled: boolean) {
+    wakeLockEnabled = enabled
+    releaseWakeLock()
+    releaseWakeLock = enabled
+      ? holdPWAScreenAwake((status) => (wakeLockStatus = status))
+      : () => {}
+    if (!enabled) wakeLockStatus = { state: 'inactive', message: 'Disabled by user' }
+  }
 
   // "Tap TUI while a modifier is latched cancels it" — a genuine tap on the
   // terminal is the user backing out of the one-shot chord, not a
@@ -84,7 +95,15 @@
        can be in the DOM at once. Nothing here is position:fixed over
        another element in this stack — that's what let the old floating
        key bar cover the promptbox (issue #2). -->
-  <Topbar {bridge} bind:inputMode {connectionState} {wakeLockStatus} onPreview={() => void preview.open()} />
+  <Topbar
+    {bridge}
+    bind:inputMode
+    {connectionState}
+    {wakeLockStatus}
+    {wakeLockEnabled}
+    onWakeLockEnabledChange={setWakeLockEnabled}
+    onPreview={() => void preview.open()}
+  />
   <PanePreview bind:this={preview} />
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->

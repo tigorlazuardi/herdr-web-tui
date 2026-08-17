@@ -50,6 +50,23 @@ test('app menu closes on one backdrop tap and exposes PWA status', async ({ page
   await expect(page.getByRole('dialog', { name: 'PWA status' })).toBeVisible()
 })
 
+test('sidebar wake lock defaults on and can be toggled for the current session', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open app menu' }).click()
+  const wakeLock = page.getByRole('switch', { name: 'Keep screen awake' })
+
+  await expect(wakeLock).toBeChecked()
+  await wakeLock.click()
+  await expect(wakeLock).not.toBeChecked()
+  await page.getByRole('button', { name: 'PWA permissions' }).click()
+  await expect(page.getByText('Disabled by user')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Close PWA status' }).click()
+  await page.getByRole('button', { name: 'Open app menu' }).click()
+  await wakeLock.click()
+  await expect(wakeLock).toBeChecked()
+})
+
 test('promptbox stays inside initial app viewport before terminal interaction', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')

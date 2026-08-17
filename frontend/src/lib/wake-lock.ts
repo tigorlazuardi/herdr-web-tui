@@ -31,6 +31,7 @@ export function holdPWAScreenAwake(onStatus: (status: WakeLockStatus) => void): 
       next.addEventListener('release', () => {
         if (lock !== next) return
         lock = undefined
+        if (stopped) return
         onStatus({ state: 'inactive', message: 'Wake lock released; reacquiring…' })
         queueMicrotask(() => void acquire())
       }, { once: true })

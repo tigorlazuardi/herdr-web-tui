@@ -7,7 +7,7 @@
   import ScanText from '@lucide/svelte/icons/scan-text'
   import Menu from '@lucide/svelte/icons/menu'
   import X from '@lucide/svelte/icons/x'
-  import { Dialog, Toolbar, Toggle } from 'bits-ui'
+  import { Dialog, Switch, Toolbar, Toggle } from 'bits-ui'
   import type { ConnectionState, TerminalBridge } from '../lib/terminal'
   import type { WakeLockStatus } from '../lib/wake-lock'
   import PushControl from './PushControl.svelte'
@@ -20,12 +20,16 @@
     inputMode = $bindable(),
     connectionState,
     wakeLockStatus,
+    wakeLockEnabled,
+    onWakeLockEnabledChange,
     onPreview,
   }: {
     bridge: TerminalBridge
     inputMode: InputMode
     connectionState: ConnectionState
     wakeLockStatus: WakeLockStatus
+    wakeLockEnabled: boolean
+    onWakeLockEnabledChange: (enabled: boolean) => void
     onPreview: () => void
   } = $props()
 
@@ -92,6 +96,20 @@
       </button>
     </header>
     <div class="menu-row"><span>Connection</span><strong>{connectionState === 'open' ? 'Connected' : connectionState === 'connecting' ? 'Connecting…' : 'Reconnecting…'}</strong></div>
+    <div class="menu-row">
+      <span>Wake lock</span>
+      <div class="wake-lock-control">
+        <strong>{wakeLockEnabled ? 'On' : 'Off'}</strong>
+        <Switch.Root
+          class="wake-lock-switch"
+          checked={wakeLockEnabled}
+          onCheckedChange={onWakeLockEnabledChange}
+          aria-label="Keep screen awake"
+        >
+          <Switch.Thumb class="wake-lock-thumb" />
+        </Switch.Root>
+      </div>
+    </div>
     <PushControl />
     <PWAStatusDialog {wakeLockStatus} onOpen={() => (menuOpen = false)} />
   </Dialog.Content>
@@ -167,10 +185,15 @@
   :global(.app-sidebar .menu-title) { margin: 0; font: 600 1.1rem/1.2 system-ui, sans-serif; }
   .close-menu { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #f5f5f4; }
   .close-menu:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
-  .menu-row { display: flex; justify-content: space-between; gap: 1rem; color: #a8a29e; font: 0.85rem/1.4 system-ui, sans-serif; }
+  .menu-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; color: #a8a29e; font: 0.85rem/1.4 system-ui, sans-serif; }
   .menu-row strong { color: #f5f5f4; }
+  .wake-lock-control { display: flex; align-items: center; gap: 0.6rem; }
+  :global(.wake-lock-switch) { flex: none; width: 2.5rem; height: 1.4rem; padding: 0.15rem; border: 1px solid #57534e; border-radius: 999px; background: #292524; transition: background 150ms ease; }
+  :global(.wake-lock-switch[data-state='checked']) { border-color: #38bdf8; background: #0369a1; }
+  :global(.wake-lock-thumb) { display: block; width: 1rem; height: 1rem; border-radius: 50%; background: #f5f5f4; transition: transform 150ms ease; }
+  :global(.wake-lock-switch[data-state='checked'] .wake-lock-thumb) { transform: translateX(1.05rem); }
 
   @media (prefers-reduced-motion: reduce) {
-    :global(.app-sidebar), :global(.drawer-backdrop) { transition-duration: 0.01ms; }
+    :global(.app-sidebar), :global(.drawer-backdrop), :global(.wake-lock-switch), :global(.wake-lock-thumb) { transition-duration: 0.01ms; }
   }
 </style>

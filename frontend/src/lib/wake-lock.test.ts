@@ -40,9 +40,11 @@ describe('holdPWAScreenAwake', () => {
     await flush()
     expect(request).toHaveBeenCalledTimes(2)
 
+    const statusCalls = onStatus.mock.calls.length
     cleanup()
     await flush()
     expect(locks[1].released).toBe(true)
+    expect(onStatus).toHaveBeenCalledTimes(statusCalls)
   })
 
   test('reacquires when the old lock releases after visibility already returned', async () => {
