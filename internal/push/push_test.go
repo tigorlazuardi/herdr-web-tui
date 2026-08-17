@@ -343,35 +343,58 @@ func TestTransitionFiltersSnapshotsAndDuplicates(t *testing.T) {
 	e := agentEvent{}
 	e.Data.PaneID = "p"
 	e.Data.AgentStatus = "done"
-	if _, _, _, ok := EventTransition(states, e); ok {
+	if _, _, _, ok := EventTransition(states, nil, e); ok {
 		t.Fatal("initial snapshot notified")
 	}
-	if _, _, _, ok := EventTransition(states, e); ok {
+	if _, _, _, ok := EventTransition(states, nil, e); ok {
 		t.Fatal("duplicate notified")
 	}
 	e.Data.AgentStatus = "working"
-	EventTransition(states, e)
+	EventTransition(states, nil, e)
 	e.Data.AgentStatus = "blocked"
-	if _, state, paneID, ok := EventTransition(states, e); !ok || state != "blocked" || paneID != "p" {
+	if _, state, paneID, ok := EventTransition(states, nil, e); !ok || state != "blocked" || paneID != "p" {
 		t.Fatal("transition missed")
 	}
 	e.Data.PaneID = "../bad"
 	e.Data.AgentStatus = "working"
-	EventTransition(states, e)
+	EventTransition(states, nil, e)
 	e.Data.AgentStatus = "done"
-	if _, _, _, ok := EventTransition(states, e); ok {
+	if _, _, _, ok := EventTransition(states, nil, e); ok {
 		t.Fatal("invalid pane target notified")
+	}
+}
+
+func TestTransitionUsesContentLabelBeforeAgent(t *testing.T) {
+	agent := "pi"
+	states := map[string]string{"p": "working"}
+	e := agentEvent{Data: agentEventData{PaneID: "p", AgentStatus: "done", Agent: &agent}}
+	if label, _, _, ok := EventTransition(states, map[string]string{"p": "Push content labels"}, e); !ok || label != "Push content labels" {
+		t.Fatalf("content label not used: label=%q ok=%v", label, ok)
+	}
+}
+
+func TestPaneNotificationLabelsPreferNamedTabAndFallbackToWorkspace(t *testing.T) {
+	var snapshot focusSnapshotResult
+	if err := json.Unmarshal([]byte(`{"type":"session_snapshot","snapshot":{"version":"test","protocol":19,"workspaces":[{"workspace_id":"w1","label":" Project\u0000 Name "}],"tabs":[{"tab_id":"t1","workspace_id":"w1","label":"Content task","number":1},{"tab_id":"t2","workspace_id":"w1","label":"2","number":2}],"panes":[{"pane_id":"p1","tab_id":"t1","workspace_id":"w1"},{"pane_id":"p2","tab_id":"t2","workspace_id":"w1"}],"layouts":[],"agents":[]}}`), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	labels := paneNotificationLabels(snapshot)
+	if labels["p1"] != "Content task" || labels["p2"] != "Project Name" {
+		t.Fatalf("labels=%v", labels)
+	}
+	if got := len([]rune(notificationLabel(strings.Repeat("x", 121)))); got != 120 {
+		t.Fatalf("bounded label length=%d", got)
 	}
 }
 
 func TestTransitionDoesNotSeedUnvalidatedPane(t *testing.T) {
 	states := map[string]string{}
 	e := agentEvent{Data: agentEventData{PaneID: "p", AgentStatus: "working"}}
-	if _, _, _, ok := EventTransition(states, e); ok || len(states) != 0 {
+	if _, _, _, ok := EventTransition(states, nil, e); ok || len(states) != 0 {
 		t.Fatalf("unseeded working event trusted: states=%v", states)
 	}
 	e.Data.AgentStatus = "done"
-	if _, _, _, ok := EventTransition(states, e); ok || len(states) != 0 {
+	if _, _, _, ok := EventTransition(states, nil, e); ok || len(states) != 0 {
 		t.Fatalf("unseeded done event dispatched: states=%v", states)
 	}
 }
@@ -458,8 +481,8 @@ func TestNotifyPayloadContainsPaneIDWithoutURL(t *testing.T) {
 	if err := svc.Notify(context.Background(), "agent", "done", "w1:p2"); err != nil {
 		t.Fatal(err)
 	}
-	if payload["pane_id"] != "w1:p2" || payload["url"] != nil {
-		t.Fatalf("unsafe notification payload: %#v", payload)
+	if payload["pane_id"] != "w1:p2" || payload["url"] != nil || payload["title"] != "agent" || payload["body"] != "Done — tap to open" {
+		t.Fatalf("unsafe or incorrect notification payload: %#v", payload)
 	}
 }
 
@@ -970,7 +993,7 @@ func TestRunEventsOnceIgnoresStalePaneReplayAndResnapshotsNewPane(t *testing.T) 
 		if err := json.Unmarshal([]byte(request), &envelope); err != nil {
 			t.Fatal(err)
 		}
-		if len(envelope.Params.Subscriptions) != 2 || envelope.Params.Subscriptions[0]["type"] != "pane.agent_status_changed" || envelope.Params.Subscriptions[0]["pane_id"] != "p1" || envelope.Params.Subscriptions[1]["type"] != "pane.created" {
+		if len(envelope.Params.Subscriptions) != 4 || envelope.Params.Subscriptions[0]["type"] != "pane.agent_status_changed" || envelope.Params.Subscriptions[0]["pane_id"] != "p1" || envelope.Params.Subscriptions[1]["type"] != "pane.created" || envelope.Params.Subscriptions[2]["type"] != "pane.moved" || envelope.Params.Subscriptions[3]["type"] != "tab.renamed" {
 			t.Fatalf("missing lifecycle subscriptions: %s", request)
 		}
 	case <-time.After(time.Second):

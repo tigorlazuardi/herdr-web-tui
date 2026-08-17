@@ -97,7 +97,7 @@ func (s *Service) paneExists(ctx context.Context, path, paneID string) (bool, er
 }
 
 // EventTransition returns a notification only for real transitions into done or blocked.
-func EventTransition(states map[string]string, e agentEvent) (string, string, string, bool) {
+func EventTransition(states, labels map[string]string, e agentEvent) (string, string, string, bool) {
 	old, seen := states[e.Data.PaneID]
 	if !seen || !validPaneID(e.Data.PaneID) {
 		return "", "", "", false
@@ -106,7 +106,11 @@ func EventTransition(states map[string]string, e agentEvent) (string, string, st
 	if old == e.Data.AgentStatus || (e.Data.AgentStatus != "done" && e.Data.AgentStatus != "blocked") {
 		return "", "", "", false
 	}
-	name := "Agent"
+	name := labels[e.Data.PaneID]
+	if name != "" {
+		return name, e.Data.AgentStatus, e.Data.PaneID, true
+	}
+	name = "Herdr"
 	if e.Data.DisplayAgent != nil && *e.Data.DisplayAgent != "" {
 		name = *e.Data.DisplayAgent
 	} else if e.Data.Agent != nil && *e.Data.Agent != "" {
@@ -162,13 +166,14 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 	events := newEventConn(ctx, rawEvents)
 	defer events.Close()
 	states := map[string]string{}
-	subs := make([]map[string]string, 0, len(snap.Snapshot.Panes)+1)
+	labels := paneNotificationLabels(snap)
+	subs := make([]map[string]string, 0, len(snap.Snapshot.Panes)+3)
 	for _, p := range snap.Snapshot.Panes {
 		states[p.PaneID] = p.AgentStatus
 		subs = append(subs, map[string]string{"type": "pane.agent_status_changed", "pane_id": p.PaneID})
 	}
 	// Pane status subscriptions require pane_id. Reconnect from a fresh snapshot when pane set grows.
-	subs = append(subs, map[string]string{"type": "pane.created"})
+	subs = append(subs, map[string]string{"type": "pane.created"}, map[string]string{"type": "pane.moved"}, map[string]string{"type": "tab.renamed"})
 	req := map[string]any{"id": "push-events", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs}}
 	if err = json.NewEncoder(events).Encode(req); err != nil {
 		return errors.Wrap(err, "write Herdr subscription request")
@@ -192,6 +197,10 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 		}
 		if !started {
 			return errors.Wrap(errHerdrProtocol, "Herdr event received before subscription started")
+		}
+		if e.Event == "pane.moved" || e.Event == "pane_moved" || e.Event == "tab.renamed" || e.Event == "tab_renamed" {
+			s.log.InfoContext(ctx, "Herdr notification labels changed", "pane.id", "<redacted>")
+			return errPaneSetChanged
 		}
 		// Herdr 0.7.4 replays existing pane_created records when a subscription starts.
 		// Reconnect only for a pane absent from the snapshot that seeded states.
@@ -238,7 +247,7 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 			span.End()
 			continue
 		}
-		name, state, paneID, ok := EventTransition(states, e)
+		name, state, paneID, ok := EventTransition(states, labels, e)
 		outcome, errorKind, reason := "ignored", "none", "nonterminal"
 		switch {
 		case !validPaneID(e.Data.PaneID):

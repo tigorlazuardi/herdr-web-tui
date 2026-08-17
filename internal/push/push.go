@@ -18,9 +18,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/go-faster/errors"
@@ -603,13 +605,24 @@ type herdrResponse struct {
 type focusSnapshotResult struct {
 	Type     string `json:"type"`
 	Snapshot *struct {
-		Version    *string           `json:"version"`
-		Protocol   *uint32           `json:"protocol"`
-		Workspaces []json.RawMessage `json:"workspaces"`
-		Tabs       []json.RawMessage `json:"tabs"`
-		Panes      []struct {
-			PaneID      string `json:"pane_id"`
-			AgentStatus string `json:"agent_status"`
+		Version    *string `json:"version"`
+		Protocol   *uint32 `json:"protocol"`
+		Workspaces []struct {
+			WorkspaceID string `json:"workspace_id"`
+			Label       string `json:"label"`
+		} `json:"workspaces"`
+		Tabs []struct {
+			TabID       string `json:"tab_id"`
+			WorkspaceID string `json:"workspace_id"`
+			Label       string `json:"label"`
+			Number      uint   `json:"number"`
+		} `json:"tabs"`
+		Panes []struct {
+			PaneID      string  `json:"pane_id"`
+			TabID       string  `json:"tab_id"`
+			WorkspaceID string  `json:"workspace_id"`
+			Label       *string `json:"label"`
+			AgentStatus string  `json:"agent_status"`
 		} `json:"panes"`
 		Layouts []json.RawMessage `json:"layouts"`
 		Agents  []json.RawMessage `json:"agents"`
@@ -786,8 +799,49 @@ func sanitizeSendError(err error) error {
 	return &sanitizedSendError{kind: kind, cause: err}
 }
 
+// notificationLabel removes control bytes and bounds Herdr labels before placing them in browser UI.
+func notificationLabel(label string) string {
+	label = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, label)
+	runes := []rune(strings.Join(strings.Fields(label), " "))
+	if len(runes) > 120 {
+		runes = runes[:120]
+	}
+	return string(runes)
+}
+
+// paneNotificationLabels resolves content names once from the snapshot that seeds event state.
+func paneNotificationLabels(s focusSnapshotResult) map[string]string {
+	workspaceLabels := make(map[string]string, len(s.Snapshot.Workspaces))
+	for _, workspace := range s.Snapshot.Workspaces {
+		workspaceLabels[workspace.WorkspaceID] = notificationLabel(workspace.Label)
+	}
+	tabLabels := make(map[string]string, len(s.Snapshot.Tabs))
+	for _, tab := range s.Snapshot.Tabs {
+		label := notificationLabel(tab.Label)
+		if label != strconv.FormatUint(uint64(tab.Number), 10) {
+			tabLabels[tab.TabID] = label
+		}
+	}
+	labels := make(map[string]string, len(s.Snapshot.Panes))
+	for _, pane := range s.Snapshot.Panes {
+		labels[pane.PaneID] = tabLabels[pane.TabID]
+		if labels[pane.PaneID] == "" && pane.Label != nil {
+			labels[pane.PaneID] = notificationLabel(*pane.Label)
+		}
+		if labels[pane.PaneID] == "" {
+			labels[pane.PaneID] = workspaceLabels[pane.WorkspaceID]
+		}
+	}
+	return labels
+}
+
 // Notify sends bounded JSON to every snapshot subscription, then returns one bounded aggregate error.
-func (s *Service) Notify(ctx context.Context, agent, state, paneID string) error {
+func (s *Service) Notify(ctx context.Context, label, state, paneID string) error {
 	if state != "done" && state != "blocked" {
 		return nil
 	}
@@ -798,7 +852,15 @@ func (s *Service) Notify(ctx context.Context, agent, state, paneID string) error
 	ctx, span := otel.Tracer("herdr-web-tui/push").Start(ctx, "push dispatch")
 	defer span.End()
 	span.SetAttributes(attribute.String("event.type", state), attribute.String("agent.name", "<redacted>"), attribute.String("push.endpoint", "<redacted>"))
-	payload, err := json.Marshal(map[string]string{"title": "Herdr agent " + state, "body": agent, "state": state, "pane_id": paneID})
+	title := notificationLabel(label)
+	if title == "" {
+		title = "Herdr"
+	}
+	body := "Done — tap to open"
+	if state == "blocked" {
+		body = "Blocked — tap to open"
+	}
+	payload, err := json.Marshal(map[string]string{"title": title, "body": body, "state": state, "pane_id": paneID})
 	if err != nil {
 		return errors.Wrap(err, "encode push payload")
 	}
