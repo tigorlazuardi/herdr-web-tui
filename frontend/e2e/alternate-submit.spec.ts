@@ -35,6 +35,17 @@ test('normal Send tap submits Enter once', async ({ page }) => {
   expect(bodies[0]).toContain('name="submitKey"\r\n\r\nenter')
 })
 
+test('right-click opens alternate submit choices without sending', async ({ page }) => {
+  const bodies: string[] = []
+  await mockSend(page, bodies)
+  await page.goto('/')
+  await page.getByRole('textbox', { name: 'Message' }).fill('hello')
+  await page.getByRole('button', { name: /^Send/ }).click({ button: 'right' })
+
+  await expect(page.getByText('Submit with')).toBeVisible()
+  expect(bodies).toHaveLength(0)
+})
+
 test('long-press suppresses normal click and submits selected alternate once', async ({ page }) => {
   const bodies: string[] = []
   await mockSend(page, bodies)

@@ -297,13 +297,17 @@
             color="primary"
             size="sm"
             class="send"
-            aria-label="Send (long-press or keyboard activate for alternate submit)"
-            title="Send · long-press for alternate submit"
+            aria-label="Send (right-click, long-press, or keyboard activate for alternate submit)"
+            title="Send · right-click or long-press for alternate submit"
             disabled={sending}
             onpointerdown={startSubmitPress}
             onpointermove={moveSubmitPointer}
             onpointerup={finishSubmitPress}
             onpointercancel={cancelSubmitPress}
+            oncontextmenu={(event) => {
+              event.preventDefault()
+              submitMenuOpen = true
+            }}
             onclick={(event) => handleSendClick(event, props.onclick)}
           >
             <Send size={18} aria-hidden="true" />
