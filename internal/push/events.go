@@ -119,6 +119,23 @@ func EventTransition(states, labels map[string]string, e agentEvent) (string, st
 	return name, e.Data.AgentStatus, e.Data.PaneID, true
 }
 
+// currentPaneNotificationLabel refreshes mutable content metadata only when a terminal event will dispatch.
+func (s *Service) currentPaneNotificationLabel(ctx context.Context, path, paneID string) (string, error) {
+	var snap focusSnapshotResult
+	request := herdrRequest{ID: "push-label-snapshot", Method: "session.snapshot", Params: map[string]any{}}
+	if err := s.herdrRoundTrip(ctx, path, "notification label snapshot", request, &snap); err != nil {
+		return "", err
+	}
+	if !validSessionSnapshot(snap) {
+		return "", errors.Wrap(errHerdrProtocol, "notification label snapshot missing required shape")
+	}
+	label, exists := paneNotificationLabels(snap)[paneID]
+	if !exists {
+		return "", errPaneNotFound
+	}
+	return label, nil
+}
+
 // RunEvents subscribes directly to verified Herdr socket events until cancellation.
 func (s *Service) RunEvents(ctx context.Context, socketPath string) error {
 	if !s.cfg.Enabled() {
@@ -167,13 +184,13 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 	defer events.Close()
 	states := map[string]string{}
 	labels := paneNotificationLabels(snap)
-	subs := make([]map[string]string, 0, len(snap.Snapshot.Panes)+3)
+	subs := make([]map[string]string, 0, len(snap.Snapshot.Panes)+1)
 	for _, p := range snap.Snapshot.Panes {
 		states[p.PaneID] = p.AgentStatus
 		subs = append(subs, map[string]string{"type": "pane.agent_status_changed", "pane_id": p.PaneID})
 	}
 	// Pane status subscriptions require pane_id. Reconnect from a fresh snapshot when pane set grows.
-	subs = append(subs, map[string]string{"type": "pane.created"}, map[string]string{"type": "pane.moved"}, map[string]string{"type": "tab.renamed"})
+	subs = append(subs, map[string]string{"type": "pane.created"})
 	req := map[string]any{"id": "push-events", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs}}
 	if err = json.NewEncoder(events).Encode(req); err != nil {
 		return errors.Wrap(err, "write Herdr subscription request")
@@ -197,10 +214,6 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 		}
 		if !started {
 			return errors.Wrap(errHerdrProtocol, "Herdr event received before subscription started")
-		}
-		if e.Event == "pane.moved" || e.Event == "pane_moved" || e.Event == "tab.renamed" || e.Event == "tab_renamed" {
-			s.log.InfoContext(ctx, "Herdr notification labels changed", "pane.id", "<redacted>")
-			return errPaneSetChanged
 		}
 		// Herdr 0.7.4 replays existing pane_created records when a subscription starts.
 		// Reconnect only for a pane absent from the snapshot that seeded states.
@@ -256,6 +269,14 @@ func (s *Service) runEventsOnce(ctx context.Context, path string) error {
 			reason = "duplicate"
 		case ok:
 			outcome, reason = "success", "dispatch"
+			if len(s.store.Get()) != 0 {
+				currentLabel, err := s.currentPaneNotificationLabel(opctx, path, paneID)
+				if err != nil {
+					s.log.WarnContext(opctx, "Herdr notification label refresh failed", "error", err, "pane.id", "<redacted>")
+				} else if currentLabel != "" {
+					name = currentLabel
+				}
+			}
 			if err := s.Notify(opctx, name, state, paneID); err != nil {
 				outcome, errorKind = "failure", "dispatch"
 				span.RecordError(errors.New("agent event push dispatch failed"))

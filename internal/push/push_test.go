@@ -993,8 +993,8 @@ func TestRunEventsOnceIgnoresStalePaneReplayAndResnapshotsNewPane(t *testing.T) 
 		if err := json.Unmarshal([]byte(request), &envelope); err != nil {
 			t.Fatal(err)
 		}
-		if len(envelope.Params.Subscriptions) != 4 || envelope.Params.Subscriptions[0]["type"] != "pane.agent_status_changed" || envelope.Params.Subscriptions[0]["pane_id"] != "p1" || envelope.Params.Subscriptions[1]["type"] != "pane.created" || envelope.Params.Subscriptions[2]["type"] != "pane.moved" || envelope.Params.Subscriptions[3]["type"] != "tab.renamed" {
-			t.Fatalf("missing lifecycle subscriptions: %s", request)
+		if len(envelope.Params.Subscriptions) != 2 || envelope.Params.Subscriptions[0]["type"] != "pane.agent_status_changed" || envelope.Params.Subscriptions[0]["pane_id"] != "p1" || envelope.Params.Subscriptions[1]["type"] != "pane.created" {
+			t.Fatalf("unexpected replay-prone lifecycle subscriptions: %s", request)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("subscription request missing")
@@ -1053,14 +1053,21 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 	if err := store.Put(sub()); err != nil {
 		t.Fatal(err)
 	}
-	svc.sender = fakeSender{status: http.StatusInternalServerError}
+	var eventPayload map[string]any
+	svc.sender = fakeSender{status: http.StatusInternalServerError, payload: func(body []byte) {
+		if err := json.Unmarshal(body, &eventPayload); err != nil {
+			t.Error(err)
+		}
+	}}
 	var eventLogs bytes.Buffer
 	svc.log = slog.New(slog.NewTextHandler(&eventLogs, nil))
 	eventSnapshotClient, eventSnapshotServer := net.Pipe()
 	eventClient, eventServer := net.Pipe()
-	eventConnections := make(chan net.Conn, 2)
+	labelSnapshotClient, labelSnapshotServer := net.Pipe()
+	eventConnections := make(chan net.Conn, 3)
 	eventConnections <- eventSnapshotClient
 	eventConnections <- eventClient
+	eventConnections <- labelSnapshotClient
 	svc.dial = func(context.Context, string, string) (net.Conn, error) { return <-eventConnections, nil }
 	go func() {
 		defer eventSnapshotServer.Close()
@@ -1077,11 +1084,21 @@ func TestBoundedTelemetrySpansMetricsAndBuckets(t *testing.T) {
 			_, _ = io.WriteString(eventServer, `{"event":"pane.agent_status_changed","data":{"pane_id":"secret-pane","agent_status":"done","agent":"secret-agent"}}`+"\n")
 		}
 	}()
+	go func() {
+		defer labelSnapshotServer.Close()
+		scan := bufio.NewScanner(labelSnapshotServer)
+		if scan.Scan() {
+			_, _ = io.WriteString(labelSnapshotServer, `{"id":"push-label-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[{"workspace_id":"w1","label":"Project"}],"tabs":[{"tab_id":"t1","workspace_id":"w1","label":"Current content title","number":1}],"panes":[{"pane_id":"secret-pane","tab_id":"t1","workspace_id":"w1","agent_status":"done"}],"layouts":[],"agents":[]}}}`+"\n")
+		}
+	}()
 	if err := svc.runEventsOnce(context.Background(), "test.sock"); err == nil {
 		t.Fatal("closed event stream returned nil")
 	}
 	if logs := eventLogs.String(); !strings.Contains(logs, "Herdr event subscription started") || !strings.Contains(logs, "Herdr agent event handled") || !strings.Contains(logs, "reason=dispatch") || strings.Contains(logs, "secret-pane") || strings.Contains(logs, "secret-agent") {
 		t.Fatalf("missing or unsafe watcher diagnostics: %s", logs)
+	}
+	if eventPayload["title"] != "Current content title" {
+		t.Fatalf("stale notification content title: %#v", eventPayload)
 	}
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/push/subscription", strings.NewReader(`{"endpoint":"https://push.example/x"}`))
 	svc.Handler().ServeHTTP(httptest.NewRecorder(), deleteReq)
