@@ -13,7 +13,8 @@ describe('PWA install metadata', () => {
     expect(html).toContain('rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials"')
   })
 
-  test('ships valid Android icon sizes', () => {
+  test('ships valid default icon sizes', () => {
+    expect(pngSize('favicon.png')).toEqual([32, 32])
     expect(pngSize('icon-192.png')).toEqual([192, 192])
     expect(pngSize('icon-512.png')).toEqual([512, 512])
   })

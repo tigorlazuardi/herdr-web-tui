@@ -92,7 +92,7 @@ func TestPreview_NewHandler_ReturnsCorrelationHeadersOnSuccessAndFailure(t *test
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(testFS(), silentLogger(), tc.herdr, t.TempDir())
+			h := New(testFS(), silentLogger(), tc.herdr, t.TempDir(), IconOverrides{})
 			req := httptest.NewRequest(http.MethodGet, "/api/pane-preview/work", nil)
 			req.Header.Set(correlation.HeaderRequestID, "preview-req-123")
 			rec := httptest.NewRecorder()

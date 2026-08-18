@@ -152,6 +152,20 @@ expected_id="/pwa/$(printf %s "$SERVER_NAME" | sha256sum | cut -d' ' -f1)"
 [ "$(printf %s "$manifest" | jq -r .name)" = "$APP_NAME" ]
 ```
 
+Optional per-server branding keeps bundled Herdr icons as defaults. Set any of
+these environment variables to override one asset:
+
+```text
+FAVICON_PATH=/absolute/path/favicon.png
+PWA_ICON_192_PATH=/absolute/path/icon-192.png
+PWA_ICON_512_PATH=/absolute/path/icon-512.png
+```
+
+Files must be readable by the service user, regular PNG files no larger than
+1 MiB, and exactly 32×32, 192×192, and 512×512 respectively. Invalid configured
+paths stop startup. Installed PWAs may retain launcher metadata; uninstall and
+reinstall the PWA after changing its icon.
+
 ## 4. Background Web Push
 
 Installed Android PWAs can receive agent `done`/`blocked` notifications while closed. HTTPS and gateway access control are required. Service has one global subscription owner; every browser that enables notifications adds an endpoint to that owner's deduplicated list and receives each eligible notification. Registration state remains local to each browser. Focused app windows suppress notification display locally. Background notifications request sound, vibration, repeated alerts, and persistent display; browser and OS notification-channel settings remain authoritative and may ignore those hints.

@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrclient"
 	"github.com/tigorlazuardi/herdr-web-tui/internal/push"
@@ -20,9 +22,27 @@ import (
 // logger is the process-wide slog.Logger built by internal/logger; herdr is
 // the HerdrClient /send injects through (production: herdrclient.NewExecHerdrClient;
 // tests: a fake); stagingDir is the flat directory /send saves uploads into
-// (production: artifact.DefaultDir's result; tests: t.TempDir()).
-func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, stagingDir string, pushService ...*push.Service) http.Handler {
+// (production: artifact.DefaultDir's result; tests: t.TempDir()); iconOverrides
+// contains optional validated PNG data for fixed browser/PWA icon routes.
+func New(fsys fs.FS, logger *slog.Logger, herdr herdrclient.HerdrClient, stagingDir string, iconOverrides IconOverrides, pushService ...*push.Service) http.Handler {
 	mux := http.NewServeMux()
+	for _, icon := range []struct {
+		path string
+		data []byte
+	}{
+		{"/favicon.png", iconOverrides.favicon},
+		{"/icon-192.png", iconOverrides.icon192},
+		{"/icon-512.png", iconOverrides.icon512},
+	} {
+		if len(icon.data) == 0 {
+			continue
+		}
+		mux.HandleFunc(icon.path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Content-Type", "image/png")
+			http.ServeContent(w, r, icon.path, time.Time{}, bytes.NewReader(icon.data))
+		})
+	}
 	if len(pushService) > 0 && pushService[0] != nil {
 		mux.Handle("/api/push/", pushService[0].Handler())
 	}

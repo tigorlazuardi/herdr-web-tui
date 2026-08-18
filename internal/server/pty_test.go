@@ -20,7 +20,7 @@ import (
 // live Herdr binary, per the design doc's testing decision that the
 // pty↔herdr path itself is integration-only.
 func TestWS_UpgradeHandshakeSucceeds(t *testing.T) {
-	srv := httptest.NewServer(New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir()))
+	srv := httptest.NewServer(New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{}))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -41,7 +41,7 @@ func TestWS_UpgradeHandshakeSucceeds(t *testing.T) {
 // invariant readInitialSize enforces before pty.Spawn is ever called, so
 // this path is exercisable without herdr installed.
 func TestWS_MalformedFirstFrameClosesWithoutSpawning(t *testing.T) {
-	srv := httptest.NewServer(New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir()))
+	srv := httptest.NewServer(New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{}))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -90,7 +90,7 @@ func TestWS_ConnectLogsResolvedSession(t *testing.T) {
 			logBuf := &syncBuffer{}
 			log := slog.New(slog.NewTextHandler(logBuf, nil))
 
-			srv := httptest.NewServer(New(testFS(), log, noopHerdrClient{}, t.TempDir()))
+			srv := httptest.NewServer(New(testFS(), log, noopHerdrClient{}, t.TempDir(), IconOverrides{}))
 			defer srv.Close()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

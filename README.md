@@ -19,6 +19,10 @@ long-running Go daemon with its frontend embedded.
 - Notification clicks that focus the referenced Herdr pane.
 - One binary; no separate frontend server at runtime.
 
+<p align="center">
+  <img src="docs/assets/mobile-preview.webp" width="420" alt="Herdr Web TUI running a terminal session from a mobile browser">
+</p>
+
 Herdr remains source of truth for sessions, panes, focus, and agent state. This
 daemon does not replace Herdr or embed itself into Herdr's process.
 
@@ -87,6 +91,9 @@ Main runtime settings:
 | `LOG_FORMAT` / `-log-format` | TTY auto-detect | `json` or `text` |
 | `SERVER_NAME` | unset | Stable per-server PWA identity and default app name |
 | `APP_NAME` | `SERVER_NAME` | Exact manifest and browser title shown for this instance |
+| `FAVICON_PATH` | bundled icon | Absolute path to a 32×32 PNG favicon |
+| `PWA_ICON_192_PATH` | bundled icon | Absolute path to a 192×192 PNG install icon |
+| `PWA_ICON_512_PATH` | bundled icon | Absolute path to a 512×512 PNG install icon |
 | `WEB_PUSH_STORE_PATH` | `./web-push-subscription.json` | Push endpoint store |
 | `VAPID_PUBLIC_KEY` | unset | Enables Web Push with matching private config |
 | `VAPID_PRIVATE_KEY` | unset | Secret; never expose to browser/logs |
@@ -102,12 +109,17 @@ Give each server stable identity, then optionally choose independent display nam
 services.herdr-web-tui.environment = {
   SERVER_NAME = config.networking.hostName;
   APP_NAME = "Home Lab Shell";
+  FAVICON_PATH = "/home/operator/.config/herdr-web-tui/favicon.png";
+  PWA_ICON_192_PATH = "/home/operator/.config/herdr-web-tui/icon-192.png";
+  PWA_ICON_512_PATH = "/home/operator/.config/herdr-web-tui/icon-512.png";
 };
 ```
 
 Manifest identity derives from `SERVER_NAME`. Manifest `name`, `short_name`, and
-browser title use `APP_NAME` exactly, falling back to `SERVER_NAME`. Existing
-installs may need reinstallation before launcher text updates.
+browser title use `APP_NAME` exactly, falling back to `SERVER_NAME`. Icon
+overrides must be readable absolute paths to PNG files with the exact dimensions
+shown above; invalid configuration stops startup. Existing installs may need
+reinstallation before launcher text or icons update.
 
 ## Security boundary
 

@@ -6,10 +6,16 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -48,7 +54,7 @@ func testFS() fs.FS {
 }
 
 func TestCorrelation_GeneratesIDWhenAbsent(t *testing.T) {
-	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -66,7 +72,7 @@ func TestCorrelation_GeneratesIDWhenAbsent(t *testing.T) {
 }
 
 func TestCorrelation_EchoesInboundID(t *testing.T) {
-	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set(correlation.HeaderRequestID, "inbound-id-123")
@@ -116,7 +122,7 @@ func TestRecover_PanicReturns500WithoutCrashing(t *testing.T) {
 }
 
 func TestStatic_ServesIndexAtRoot(t *testing.T) {
-	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -134,7 +140,7 @@ func TestStatic_ServesIndexAtRoot(t *testing.T) {
 }
 
 func TestStatic_SPAFallbackForUnknownPath(t *testing.T) {
-	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{})
 
 	req := httptest.NewRequest(http.MethodGet, "/anything/goes-here", nil)
 	rec := httptest.NewRecorder()
@@ -149,7 +155,7 @@ func TestStatic_SPAFallbackForUnknownPath(t *testing.T) {
 }
 
 func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
-	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{})
 
 	req := httptest.NewRequest(http.MethodGet, "/assets/index-abc123.js", nil)
 	rec := httptest.NewRecorder()
@@ -164,12 +170,107 @@ func TestStatic_HashedAssetGetsLongCache(t *testing.T) {
 	}
 }
 
+func TestIconOverridesFromEnv_ServesValidatedPNGs(t *testing.T) {
+	for _, key := range []string{"FAVICON_PATH", "PWA_ICON_192_PATH", "PWA_ICON_512_PATH"} {
+		t.Setenv(key, "")
+	}
+
+	icons := []struct {
+		env           string
+		path          string
+		width, height int
+		data          []byte
+	}{
+		{env: "FAVICON_PATH", path: "/favicon.png", width: 32, height: 32},
+		{env: "PWA_ICON_192_PATH", path: "/icon-192.png", width: 192, height: 192},
+		{env: "PWA_ICON_512_PATH", path: "/icon-512.png", width: 512, height: 512},
+	}
+	for i := range icons {
+		filename, data := writeTestPNG(t, icons[i].width, icons[i].height)
+		t.Setenv(icons[i].env, filename)
+		icons[i].data = data
+	}
+
+	overrides, err := IconOverridesFromEnv()
+	if err != nil {
+		t.Fatalf("load icon overrides: %v", err)
+	}
+	handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), overrides)
+	for _, icon := range icons {
+		req := httptest.NewRequest(http.MethodGet, icon.path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), icon.data) {
+			t.Fatalf("%s did not serve configured PNG", icon.path)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "image/png" {
+			t.Fatalf("%s content type = %q", icon.path, got)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Fatalf("%s cache control = %q", icon.path, got)
+		}
+	}
+}
+
+func TestIconOverridesFromEnv_RejectsInvalidConfig(t *testing.T) {
+	wrongSize, _ := writeTestPNG(t, 16, 16)
+	notPNG := filepath.Join(t.TempDir(), "not-png.png")
+	if err := os.WriteFile(notPNG, []byte("not png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "relative path", path: "icon.png"},
+		{name: "missing file", path: filepath.Join(t.TempDir(), "missing.png")},
+		{name: "non PNG", path: notPNG},
+		{name: "wrong dimensions", path: wrongSize},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, key := range []string{"FAVICON_PATH", "PWA_ICON_192_PATH", "PWA_ICON_512_PATH"} {
+				t.Setenv(key, "")
+			}
+			t.Setenv("FAVICON_PATH", test.path)
+			if _, err := IconOverridesFromEnv(); err == nil {
+				t.Fatal("expected invalid icon override to fail")
+			}
+		})
+	}
+}
+
+func writeTestPNG(t *testing.T, width, height int) (string, []byte) {
+	t.Helper()
+	filename := filepath.Join(t.TempDir(), fmt.Sprintf("%dx%d.png", width, height))
+	file, err := os.Create(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pixels := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(pixels, pixels.Bounds(), image.NewUniform(color.RGBA{R: 0x42, G: 0xa5, B: 0xf5, A: 0xff}), image.Point{}, draw.Src)
+	if err := png.Encode(file, pixels); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filename, data
+}
+
 func TestManifestUsesConfiguredNames(t *testing.T) {
 	get := func(serverName, appName, requestPath string) manifest {
 		t.Helper()
 		t.Setenv("SERVER_NAME", serverName)
 		t.Setenv("APP_NAME", appName)
-		handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir())
+		handler := New(testFS(), silentLogger(), noopHerdrClient{}, t.TempDir(), IconOverrides{})
 		req := httptest.NewRequest(http.MethodGet, requestPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

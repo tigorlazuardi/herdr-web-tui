@@ -1,13 +1,20 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"image/png"
+	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
+
+	"github.com/go-faster/errors"
 )
 
 // newStaticHandler serves the embedded frontend build with SPA-fallback
@@ -70,6 +77,79 @@ func setCacheHeaders(w http.ResponseWriter, urlPath string) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
+}
+
+const maxIconOverrideBytes = 1 << 20
+
+// IconOverrides contains validated operator-provided PNG assets. Empty fields
+// retain the corresponding frontend-bundled default.
+type IconOverrides struct {
+	favicon []byte
+	icon192 []byte
+	icon512 []byte
+}
+
+// IconOverridesFromEnv loads optional icon overrides from absolute paths in
+// FAVICON_PATH, PWA_ICON_192_PATH, and PWA_ICON_512_PATH.
+func IconOverridesFromEnv() (IconOverrides, error) {
+	var overrides IconOverrides
+	for _, icon := range []struct {
+		env           string
+		width, height int
+		destination   *[]byte
+	}{
+		{"FAVICON_PATH", 32, 32, &overrides.favicon},
+		{"PWA_ICON_192_PATH", 192, 192, &overrides.icon192},
+		{"PWA_ICON_512_PATH", 512, 512, &overrides.icon512},
+	} {
+		data, err := loadPNGOverride(icon.env, icon.width, icon.height)
+		if err != nil {
+			return IconOverrides{}, err
+		}
+		*icon.destination = data
+	}
+	return overrides, nil
+}
+
+func loadPNGOverride(env string, width, height int) ([]byte, error) {
+	filename := os.Getenv(env)
+	if filename == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(filename) {
+		return nil, errors.Errorf("%s must be an absolute path", env)
+	}
+
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, errors.Wrapf(err, "open %s", env)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, errors.Wrapf(err, "stat %s", env)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.Errorf("%s must reference a regular file", env)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, maxIconOverrideBytes+1))
+	if err != nil {
+		return nil, errors.Wrapf(err, "read %s", env)
+	}
+	if len(data) > maxIconOverrideBytes {
+		return nil, errors.Errorf("%s exceeds %d bytes", env, maxIconOverrideBytes)
+	}
+	image, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, errors.Wrapf(err, "decode %s as PNG", env)
+	}
+	bounds := image.Bounds()
+	if bounds.Dx() != width || bounds.Dy() != height {
+		return nil, errors.Errorf("%s must be %dx%d PNG, got %dx%d", env, width, height, bounds.Dx(), bounds.Dy())
+	}
+	return data, nil
 }
 
 type manifest struct {

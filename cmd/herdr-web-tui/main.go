@@ -53,6 +53,11 @@ func run() error {
 		return errors.Wrap(err, "resolve artifact staging dir")
 	}
 	herdr := herdrclient.NewExecHerdrClient(log)
+	iconOverrides, err := server.IconOverridesFromEnv()
+	if err != nil {
+		log.Error("PWA icon configuration failed", "error", err)
+		return errors.Wrap(err, "load PWA icon overrides")
+	}
 	pushConfig, pushStore, err := loadPush(log)
 	if err != nil {
 		return err
@@ -79,7 +84,7 @@ func run() error {
 			}
 		}()
 	}
-	handler := server.New(distFS, log, herdr, stagingDir, pushService)
+	handler := server.New(distFS, log, herdr, stagingDir, iconOverrides, pushService)
 
 	srv := &http.Server{
 		Addr:    *addr,
