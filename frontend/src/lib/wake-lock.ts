@@ -49,6 +49,11 @@ export function holdPWAScreenAwake(onStatus: (status: WakeLockStatus) => void): 
       onStatus({ state: 'inactive', message: 'Wake lock paused while app is hidden' })
       return
     }
+    if (lock?.released) lock = undefined
+    if (lock) {
+      onStatus({ state: 'active', message: 'Screen stays awake' })
+      return
+    }
     void acquire()
   }
 
