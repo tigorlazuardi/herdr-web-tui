@@ -1,5 +1,13 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { holdPWAScreenAwake } from './wake-lock'
+
+beforeEach(() => {
+  const events = new EventTarget()
+  vi.stubGlobal('window', {
+    addEventListener: events.addEventListener.bind(events),
+    removeEventListener: events.removeEventListener.bind(events),
+  })
+})
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -76,6 +84,41 @@ describe('holdPWAScreenAwake', () => {
     await flush()
 
     expect(request).toHaveBeenCalledTimes(1)
+    expect(onStatus).toHaveBeenLastCalledWith({ state: 'active', message: 'Screen stays awake' })
+  })
+
+  test('recovers after a suspended app returns visible without a visibility event', async () => {
+    const documentEvents = new EventTarget()
+    const windowEvents = new EventTarget()
+    let visibilityState: DocumentVisibilityState = 'visible'
+    const fakeDocument = {
+      get visibilityState() { return visibilityState },
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
+    }
+    const lockEvents = new EventTarget()
+    const lock = {
+      released: false,
+      addEventListener: lockEvents.addEventListener.bind(lockEvents),
+      release: vi.fn(),
+    }
+    vi.stubGlobal('document', fakeDocument)
+    vi.stubGlobal('window', {
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    })
+    vi.stubGlobal('navigator', { wakeLock: { request: vi.fn().mockResolvedValue(lock) } })
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    const onStatus = vi.fn()
+
+    holdPWAScreenAwake(onStatus)
+    await flush()
+    visibilityState = 'hidden'
+    documentEvents.dispatchEvent(new Event('visibilitychange'))
+    visibilityState = 'visible'
+    windowEvents.dispatchEvent(new Event('focus'))
+    await flush()
+
     expect(onStatus).toHaveBeenLastCalledWith({ state: 'active', message: 'Screen stays awake' })
   })
 

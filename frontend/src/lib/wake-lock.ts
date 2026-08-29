@@ -58,11 +58,13 @@ export function holdPWAScreenAwake(onStatus: (status: WakeLockStatus) => void): 
   }
 
   document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('focus', onVisibilityChange)
   void acquire()
 
   return () => {
     stopped = true
     document.removeEventListener('visibilitychange', onVisibilityChange)
+    window.removeEventListener('focus', onVisibilityChange)
     void lock?.release()
   }
 }
