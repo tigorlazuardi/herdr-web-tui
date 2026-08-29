@@ -122,12 +122,22 @@ describe('push lifecycle', () => {
     await expect(togglePush(registration)).resolves.toEqual({ state: 'error', message: 'browser store unavailable' })
   })
 
-  it('posts strict pane-only focus request and surfaces stale pane error', async () => {
+  it('posts strict pane-only focus request and treats a stale pane as workspace fallback', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(new Response('pane no longer exists', { status: 404 })))
-    await focusPane('w1:p2')
+    await expect(focusPane('w1:p2')).resolves.toBe(true)
     expect(fetch).toHaveBeenCalledWith('/api/push/focus', expect.objectContaining({ method: 'POST', body: '{"pane_id":"w1:p2"}' }))
-    await expect(focusPane('stale')).rejects.toThrow('pane no longer exists')
+    await expect(focusPane('stale')).resolves.toBe(false)
     await expect(focusPane('https://evil.example')).rejects.toThrow('Invalid notification pane target')
+  })
+
+  it('clears focus feedback when notification pane no longer exists', async () => {
+    vi.stubGlobal('navigator', { serviceWorker: { addEventListener: vi.fn(), removeEventListener: vi.fn() } })
+    vi.stubGlobal('window', { location: { href: 'https://app.example/?pane_id=stale', origin: 'https://app.example' } })
+    vi.stubGlobal('history', { state: null, replaceState: vi.fn() })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('pane no longer exists', { status: 404 })))
+    const feedback: Array<string | null> = []
+    consumePaneFocus((value) => feedback.push(value ? `${value.state}:${value.message}` : null))
+    await vi.waitFor(() => expect(feedback).toEqual(['pending:Opening notification pane…', null]))
   })
 
   it('consumes query once, removes it, and emits visible focus feedback', async () => {
@@ -137,7 +147,7 @@ describe('push lifecycle', () => {
     vi.stubGlobal('history', { state: null, replaceState: vi.fn() })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })))
     const feedback: string[] = []
-    consumePaneFocus((value) => feedback.push(`${value.state}:${value.message}`))
+    consumePaneFocus((value) => { if (value) feedback.push(`${value.state}:${value.message}`) })
     await vi.waitFor(() => expect(feedback).toEqual(['pending:Opening notification pane…', 'success:Notification pane opened']))
     expect(history.replaceState).toHaveBeenCalled()
     listeners.message(new MessageEvent('message', { data: { type: 'herdr-pane-focus', pane_id: 'other' }, origin: 'https://app.example' }))

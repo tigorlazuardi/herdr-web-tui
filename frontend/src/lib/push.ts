@@ -79,27 +79,29 @@ export async function initialPushFeedback(registration: ServiceWorkerRegistratio
   }
 }
 
-/** Focuses one strictly validated pane through trusted same-origin API. */
-export async function focusPane(paneId: string): Promise<void> {
+/** Focuses one strictly validated pane; false means its workspace fallback is already visible. */
+export async function focusPane(paneId: string): Promise<boolean> {
   if (!validPaneId(paneId)) throw new Error('Invalid notification pane target')
   const response = await fetch('/api/push/focus', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pane_id: paneId })
   })
+  if (response.status === 404) return false
   if (!response.ok) throw await responseError(response, 'Focusing notification pane failed')
+  return true
 }
 
-/** Consumes query or one bounded worker message once; caller receives visible lifecycle feedback. */
-export function consumePaneFocus(onFeedback: (feedback: PaneFocusFeedback) => void): () => void {
+/** Consumes query or one bounded worker message once; null clears completed fallback feedback. */
+export function consumePaneFocus(onFeedback: (feedback: PaneFocusFeedback | null) => void): () => void {
   let consumed = false
   const consume = async (paneId: unknown) => {
     if (consumed || !validPaneId(paneId)) return
     consumed = true
     onFeedback({ state: 'pending', message: 'Opening notification pane…' })
     try {
-      await focusPane(paneId)
-      onFeedback({ state: 'success', message: 'Notification pane opened' })
+      const focused = await focusPane(paneId)
+      onFeedback(focused ? { state: 'success', message: 'Notification pane opened' } : null)
     } catch (error) {
       onFeedback({ state: 'error', message: error instanceof Error ? error.message : String(error) })
     }

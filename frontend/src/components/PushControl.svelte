@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { Portal } from 'bits-ui'
   import { consumePaneFocus, initialPushFeedback, isTransientFeedback, registerPushWorker, supportsPush, togglePush, type PaneFocusFeedback, type PushState } from '../lib/push'
 
   let registration = $state<ServiceWorkerRegistration | null>(null)
@@ -10,7 +11,7 @@
 
   $effect(() => {
     const clearMessage = message && isTransientFeedback(pushState)
-    const clearPaneFocus = paneFocus && isTransientFeedback(paneFocus.state)
+    const clearPaneFocus = paneFocus
     if (!clearMessage && !clearPaneFocus) return
     const timeout = setTimeout(() => {
       if (clearMessage) message = ''
@@ -53,10 +54,13 @@
   {#if message && !transientMessage}<p class:error={pushState === 'error' || pushState === 'denied'}>{message}</p>{/if}
 </div>
 {#if paneFocus || transientMessage}
-  <div class="toast-stack" aria-live="polite">
-    {#if paneFocus}<span class:error={paneFocus.state === 'error'}>{paneFocus.message}</span>{/if}
-    {#if transientMessage}<span class:error={pushState === 'error' || pushState === 'denied'}>{transientMessage}</span>{/if}
-  </div>
+  <!-- Drawer transform creates a fixed-position containing block; portal keeps toast viewport-relative above xterm. -->
+  <Portal>
+    <div class="toast-stack" aria-live="polite">
+      {#if paneFocus}<span class:error={paneFocus.state === 'error'}>{paneFocus.message}</span>{/if}
+      {#if transientMessage}<span class:error={pushState === 'error' || pushState === 'denied'}>{transientMessage}</span>{/if}
+    </div>
+  </Portal>
 {/if}
 
 <style>
