@@ -38,13 +38,13 @@ func setupPaneSendInputSocket(t *testing.T, protocol int) net.Listener {
 }
 
 func TestParseServerStatus_AcceptsReviewedFixturesAndRejectsUnknown(t *testing.T) {
-	for _, protocol := range []int{16, 17, 19} {
+	for _, protocol := range []int{16, 17, 19, 20, 21, 22} {
 		fixture := []byte(`{"running":true,"protocol":` + strconv.Itoa(protocol) + `,"socket":"/tmp/herdr.sock"}`)
 		if _, err := parseServerStatus(fixture); err != nil {
 			t.Fatalf("protocol %d fixture rejected: %v", protocol, err)
 		}
 	}
-	if _, err := parseServerStatus([]byte(`{"running":true,"protocol":20,"socket":"/tmp/herdr.sock"}`)); err == nil || !strings.Contains(err.Error(), "unsupported herdr protocol 20") {
+	if _, err := parseServerStatus([]byte(`{"running":true,"protocol":23,"socket":"/tmp/herdr.sock"}`)); err == nil || !strings.Contains(err.Error(), "unsupported herdr protocol 23") {
 		t.Fatalf("expected unknown protocol to fail closed, got %v", err)
 	}
 }
@@ -60,7 +60,7 @@ func TestExecHerdrClient_PaneSendInput_WritesReviewedEnvelopeForAcceptedProtocol
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix socket transport")
 	}
-	for _, protocol := range []int{16, 17, 19} {
+	for _, protocol := range []int{16, 17, 19, 20, 21, 22} {
 		t.Run(strconv.Itoa(protocol), func(t *testing.T) {
 			listener := setupPaneSendInputSocket(t, protocol)
 			request := make(chan string, 1)

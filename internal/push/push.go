@@ -26,6 +26,7 @@ import (
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/go-faster/errors"
+	"github.com/tigorlazuardi/herdr-web-tui/internal/herdrprotocol"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -634,7 +635,7 @@ func validSessionSnapshot(s focusSnapshotResult) bool {
 		return false
 	}
 	// ponytail: accept only schema-reviewed Herdr protocols; add future versions after compatibility review.
-	protocolSupported := *s.Snapshot.Protocol == 16 || *s.Snapshot.Protocol == 17 || *s.Snapshot.Protocol == 19 || *s.Snapshot.Protocol == 20
+	protocolSupported := herdrprotocol.IsReviewed(*s.Snapshot.Protocol)
 	return s.Type == "session_snapshot" && s.Snapshot.Version != nil && protocolSupported && s.Snapshot.Workspaces != nil && s.Snapshot.Tabs != nil && s.Snapshot.Panes != nil && s.Snapshot.Layouts != nil && s.Snapshot.Agents != nil
 }
 

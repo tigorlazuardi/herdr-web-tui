@@ -871,7 +871,7 @@ func TestRunEventsOnceRejectsInvalidSeedSnapshot(t *testing.T) {
 		"missing result":   `{"id":"push-snapshot"}`,
 		"malformed":        `{`,
 		"wrong type":       `{"id":"push-snapshot","result":{"type":"ok"}}`,
-		"unknown protocol": `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":21,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`,
+		"unknown protocol": `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":23,"workspaces":[],"tabs":[],"panes":[],"layouts":[],"agents":[]}}}`,
 		"missing panes":    `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"layouts":[],"agents":[]}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -948,7 +948,7 @@ func TestRunEventsOnceIgnoresStalePaneReplayAndResnapshotsNewPane(t *testing.T) 
 			_, _ = io.WriteString(server, response+"\n")
 		}
 	}
-	go serve(snapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"0.8.2","protocol":20,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","agent_status":"working"}],"layouts":[],"agents":[],"focused_workspace_id":"w1","focused_tab_id":"t1","focused_pane_id":"p1"}}}`)
+	go serve(snapshotServer, `{"id":"push-snapshot","result":{"type":"session_snapshot","snapshot":{"version":"current","protocol":22,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1","agent_status":"working"}],"layouts":[],"agents":[],"focused_workspace_id":"w1","focused_tab_id":"t1","focused_pane_id":"p1"}}}`)
 	go serve(staleServer, `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1"}],"layouts":[],"agents":[]}}}`)
 	go serve(newServer, `{"id":"push-pane-check","result":{"type":"session_snapshot","snapshot":{"version":"test","protocol":16,"workspaces":[],"tabs":[],"panes":[{"pane_id":"p1"},{"pane_id":"p2"}],"layouts":[],"agents":[]}}}`)
 	go func() {
