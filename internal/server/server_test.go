@@ -29,6 +29,14 @@ import (
 // every method fails loudly if accidentally called.
 type noopHerdrClient struct{}
 
+func (noopHerdrClient) ActiveMachine(context.Context) (string, error) {
+	panic("noopHerdrClient: unexpected call")
+}
+
+func (noopHerdrClient) For(string) herdrclient.HerdrClient {
+	panic("noopHerdrClient: unexpected call")
+}
+
 func (noopHerdrClient) FocusedPane(context.Context, string) (*herdrclient.PaneInfo, error) {
 	panic("noopHerdrClient: unexpected call")
 }

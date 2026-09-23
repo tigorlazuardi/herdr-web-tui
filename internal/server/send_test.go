@@ -29,9 +29,23 @@ type fakeHerdrClient struct {
 	paneRunErr       error
 	paneSendInputErr error
 
+	// activeMachine is what ActiveMachine reports; For(machine) records the
+	// machine the handler routed to so tests can assert target selection.
+	activeMachine string
+	routedMachine string
+
 	// calls records every final injection invocation, in order, so a test can
 	// assert PaneRun was called exactly once (or not at all).
 	calls []string
+}
+
+func (f *fakeHerdrClient) ActiveMachine(context.Context) (string, error) {
+	return f.activeMachine, nil
+}
+
+func (f *fakeHerdrClient) For(machine string) herdrclient.HerdrClient {
+	f.routedMachine = machine
+	return f
 }
 
 func (f *fakeHerdrClient) FocusedPane(context.Context, string) (*herdrclient.PaneInfo, error) {
@@ -161,6 +175,54 @@ func TestSend_ModifiedSubmit_UsesOneAtomicSendInput(t *testing.T) {
 			want := fmt.Sprintf("default/w1:p1 [%s]: hello", herdrKey)
 			if len(herdr.calls) != 1 || herdr.calls[0] != want {
 				t.Fatalf("expected one atomic send_input %q, got %v", want, herdr.calls)
+			}
+		})
+	}
+}
+
+func TestSend_MachineSelected_RoutesThroughMachineClient(t *testing.T) {
+	herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}, activeMachine: "m2"}
+	h := newSendHandler(herdr, t.TempDir(), silentLogger())
+	tmpl := &artifact.Template{Segments: []artifact.Segment{{Text: "hello"}}}
+	body, ctype := buildMultipartWithSubmit(t, tmpl, "default", "enter", nil)
+	req := httptest.NewRequest(http.MethodPost, "/send", body)
+	req.Header.Set("Content-Type", ctype)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if herdr.routedMachine != "m2" {
+		t.Fatalf("expected routing through machine m2, routed to %q", herdr.routedMachine)
+	}
+	if len(herdr.calls) != 1 || herdr.calls[0] != "default/w1:p1: hello" {
+		t.Fatalf("expected one routed PaneRun, got %v", herdr.calls)
+	}
+}
+
+func TestSend_MachineSelected_ModifiedSubmit_Returns400BeforeInject(t *testing.T) {
+	for _, key := range []string{"ctrl-enter", "alt-enter"} {
+		t.Run(key, func(t *testing.T) {
+			herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}, activeMachine: "m2"}
+			h := newSendHandler(herdr, t.TempDir(), silentLogger())
+			tmpl := &artifact.Template{Segments: []artifact.Segment{{Text: "hello"}}}
+			body, ctype := buildMultipartWithSubmit(t, tmpl, "default", key, nil)
+			req := httptest.NewRequest(http.MethodPost, "/send", body)
+			req.Header.Set("Content-Type", ctype)
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if len(herdr.calls) != 0 {
+				t.Fatalf("expected no inject toward machine, got %v", herdr.calls)
+			}
+			if !strings.Contains(rec.Body.String(), "ssh machine") {
+				t.Fatalf("expected ssh-machine explanation in body, got %s", rec.Body.String())
 			}
 		})
 	}

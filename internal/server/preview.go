@@ -35,8 +35,16 @@ func (h *previewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	session := sanitizeSession(strings.TrimPrefix(r.URL.Path, "/api/pane-preview/"))
+	// Follow the operator's machine selection so the preview shows the pane
+	// the browser is actually rendering (same routing rationale as /send).
+	machine, err := h.herdr.ActiveMachine(r.Context())
+	if err != nil {
+		h.logger.WarnContext(r.Context(), "preview: machine selection unresolved; routing to Local", slog.String("error", err.Error()))
+		machine = ""
+	}
+	routed := h.herdr.For(machine)
 	start := time.Now()
-	pane, err := h.herdr.FocusedPane(r.Context(), session)
+	pane, err := routed.FocusedPane(r.Context(), session)
 	if err != nil {
 		h.logger.WarnContext(r.Context(), "preview: focused-pane resolution failed", slog.String("session", session), slog.String("error", err.Error()))
 		if errors.Is(err, herdrclient.ErrUnreachable) {
@@ -47,7 +55,7 @@ func (h *previewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	text, err := h.herdr.PaneRead(r.Context(), session, pane.PaneID, 0)
+	text, err := routed.PaneRead(r.Context(), session, pane.PaneID, 0)
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "preview: pane read failed", slog.String("session", session), slog.String("pane", pane.PaneID), slog.Duration("duration", time.Since(start)), slog.String("error", err.Error()))
 		writeSendError(w, http.StatusInternalServerError, "preview failed: "+err.Error())

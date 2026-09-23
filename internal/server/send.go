@@ -114,8 +114,34 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The browser renders whatever machine the operator selected in Herdr's
+	// own sidebar, so the send target must follow that selection: pane IDs
+	// are scoped per server, and the local server's focus stays stale while
+	// a machine view is active. Detection failure degrades to Local (older
+	// herdr lacks `machine list --json`); Local focus then resolves exactly
+	// as before.
+	machine, err := h.herdr.ActiveMachine(ctx)
+	if err != nil {
+		h.logger.WarnContext(ctx, "send: machine selection unresolved; routing to Local",
+			slog.String("error", err.Error()))
+		machine = ""
+	}
+	routed := h.herdr.For(machine)
+
+	if machine != "" && key != submitEnter {
+		// pane.send_input dials the session socket, which lives on the
+		// remote host; no atomic remote text+modified-key primitive exists
+		// yet. Fail closed instead of partially injecting text and key as
+		// two sequential calls.
+		h.logger.WarnContext(ctx, "send: modified submit toward ssh machine rejected",
+			slog.String("machine", machine), slog.String("submit_key", string(key)))
+		writeSendError(w, http.StatusBadRequest,
+			fmt.Sprintf("submit key %q is not supported toward ssh machine %q yet; use Enter", string(key), machine))
+		return
+	}
+
 	start := time.Now()
-	pane, err := h.herdr.FocusedPane(ctx, session)
+	pane, err := routed.FocusedPane(ctx, session)
 	if err != nil {
 		h.logger.WarnContext(ctx, "send: focused-pane resolution failed",
 			slog.String("session", session), slog.String("error", err.Error()))
@@ -128,15 +154,15 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if key == submitEnter {
-		err = h.herdr.PaneRun(ctx, session, pane.PaneID, text)
+		err = routed.PaneRun(ctx, session, pane.PaneID, text)
 	} else {
 		herdrKey := map[submitKey]string{submitCtrlEnter: "ctrl+enter", submitAltEnter: "alt+enter"}[key]
-		err = h.herdr.PaneSendInput(ctx, session, pane.PaneID, text, herdrKey)
+		err = routed.PaneSendInput(ctx, session, pane.PaneID, text, herdrKey)
 	}
 	duration := time.Since(start)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "send: inject failed",
-			slog.String("session", session), slog.String("pane", pane.PaneID),
+			slog.String("session", session), slog.String("machine", machine), slog.String("pane", pane.PaneID),
 			slog.String("submit_key", string(key)),
 			slog.Duration("duration", duration), slog.String("error", err.Error()),
 		)
@@ -145,7 +171,7 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.InfoContext(ctx, "send: inject ok",
-		slog.String("session", session), slog.String("pane", pane.PaneID),
+		slog.String("session", session), slog.String("machine", machine), slog.String("pane", pane.PaneID),
 		slog.String("submit_key", string(key)), slog.Duration("duration", duration),
 	)
 	writeJSON(w, http.StatusOK, sendResponse{OK: true})

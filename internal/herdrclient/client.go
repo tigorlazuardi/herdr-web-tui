@@ -46,6 +46,23 @@ type PaneInfo struct {
 // several concurrent sessions (ticket 2) and HerdrClient itself is
 // stateless / safe for concurrent use.
 type HerdrClient interface {
+	// ActiveMachine returns the SSH machine profile Herdr reports as the
+	// operator's current client selection (enabled + selected), or "" when
+	// the client is on Local. Herdr 0.9 machine selection is host-wide
+	// client state shared by every attached client of this user — the same
+	// "last selection wins" semantics as the server-wide focused pane.
+	// Detection failure (for example an older herdr without
+	// `machine list --json`) returns an error; callers decide whether to
+	// degrade to Local routing.
+	ActiveMachine(ctx context.Context) (string, error)
+
+	// For returns a client routed to the given machine profile ("" routes
+	// to Local exactly like the receiver). Routed calls drop --session and
+	// run `herdr --machine <id> ...` instead: the profile binds its own
+	// remote session, and pane IDs are scoped to one server (herdr docs:
+	// "Workspace, tab, pane IDs ... are scoped to one server").
+	For(machine string) HerdrClient
+
 	// FocusedPane resolves the pane the given session currently has
 	// focused. Callers use this to find the inject target for /send: there
 	// is no target picker, injection always goes to the focused pane. A
@@ -97,6 +114,107 @@ type paneCurrentResponse struct {
 			PaneID string `json:"pane_id"`
 		} `json:"pane"`
 	} `json:"result"`
+}
+
+// machineListProfile is one entry of `herdr machine list --json` (herdr
+// 0.9.0): only the fields ActiveMachine consumes.
+type machineListProfile struct {
+	ID       string `json:"id"`
+	Enabled  bool   `json:"enabled"`
+	Selected bool   `json:"selected"`
+}
+
+// ActiveMachine implements HerdrClient.ActiveMachine via the supported CLI
+// surface rather than parsing herdr's internal state files: the selected
+// flag comes straight from `herdr machine list --json`.
+func (c *ExecHerdrClient) ActiveMachine(ctx context.Context) (string, error) {
+	out, err := runArgs(ctx, c.logger, nil, "machine", "list", "--json")
+	if err != nil {
+		return "", err
+	}
+	var profiles []machineListProfile
+	if err := json.Unmarshal(out, &profiles); err != nil {
+		return "", errors.Wrap(err, "parse machine list response")
+	}
+	for _, p := range profiles {
+		if p.Enabled && p.Selected {
+			return p.ID, nil
+		}
+	}
+	return "", nil
+}
+
+// For implements HerdrClient.For. The zero machine keeps the receiver so
+// Local call sites keep their exact previous argv.
+func (c *ExecHerdrClient) For(machine string) HerdrClient {
+	if machine == "" {
+		return c
+	}
+	return machineRoutedClient{parent: c, machine: machine}
+}
+
+// machineRoutedClient routes every herdr invocation through one saved SSH
+// machine profile. Herdr's CLI owns the SSH transport (target, session, and
+// connection reuse come from the saved profile), so this wrapper only
+// swaps the invocation prefix.
+type machineRoutedClient struct {
+	parent  *ExecHerdrClient
+	machine string
+}
+
+func (m machineRoutedClient) ActiveMachine(ctx context.Context) (string, error) {
+	return m.parent.ActiveMachine(ctx)
+}
+
+func (m machineRoutedClient) For(machine string) HerdrClient {
+	if machine == "" || machine == m.machine {
+		return m
+	}
+	return m.parent.For(machine)
+}
+
+func (m machineRoutedClient) FocusedPane(ctx context.Context, session string) (*PaneInfo, error) {
+	// session is intentionally ignored: a machine profile binds its own
+	// remote session (herdr rejects combining --remote routing with
+	// --session, and the saved profile already names the session).
+	pane, err := m.parent.FocusedPane(ctx, session)
+	if err != nil {
+		return nil, errors.Wrapf(ErrUnreachable, "ssh machine %s: %s", m.machine, err)
+	}
+	return pane, nil
+}
+
+func (m machineRoutedClient) PaneRun(ctx context.Context, session, pane, text string) error {
+	return m.parent.runRouted(ctx, m.machine, "pane", "run", pane, text)
+}
+
+func (m machineRoutedClient) PaneSendInput(ctx context.Context, session, pane, text, key string) error {
+	// pane.send_input requires dialing the session socket, which lives on
+	// the remote host; there is no atomic remote text+modified-key CLI
+	// primitive yet. send.go blocks this earlier with a 4xx; this guard
+	// keeps the invariant even when called directly.
+	return fmt.Errorf("pane.send_input is local-only; ssh machine %s supports Enter submit only", m.machine)
+}
+
+func (m machineRoutedClient) PaneRead(ctx context.Context, session, pane string, lines int) (string, error) {
+	return m.parent.readRouted(ctx, m.machine, pane, lines)
+}
+
+func (c *ExecHerdrClient) runRouted(ctx context.Context, machine string, args ...string) error {
+	_, err := runArgs(ctx, c.logger, []string{"--machine", machine}, args...)
+	return err
+}
+
+func (c *ExecHerdrClient) readRouted(ctx context.Context, machine, pane string, lines int) (string, error) {
+	args := []string{"pane", "read", pane, "--source", "visible", "--format", "text"}
+	if lines > 0 {
+		args = append(args, "--lines", strconv.Itoa(lines))
+	}
+	out, err := runArgs(ctx, c.logger, []string{"--machine", machine}, args...)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func (c *ExecHerdrClient) FocusedPane(ctx context.Context, session string) (*PaneInfo, error) {
@@ -237,7 +355,14 @@ func (c *ExecHerdrClient) PaneRead(ctx context.Context, session, pane string, li
 }
 
 // run invokes `herdr --session <session> <args...>` and returns stdout on
-// success. On failure the returned error's message is herdr's stderr,
+// success. See runArgs for failure semantics.
+func run(ctx context.Context, logger *slog.Logger, session string, args ...string) ([]byte, error) {
+	return runArgs(ctx, logger, []string{"--session", session}, args...)
+}
+
+// runArgs invokes `herdr <prefix...> <args...>` and returns stdout on
+// success; prefix carries the routing flag (--session or --machine) and may
+// be nil. On failure the returned error's message is herdr's stderr,
 // quoted exactly (design doc: "herdr stderr quoted exact") — never
 // swallowed, never reworded, so the operator sees the real cause. When the
 // herdr binary itself could not be spawned (missing from PATH), the error
@@ -249,8 +374,8 @@ func (c *ExecHerdrClient) PaneRead(ctx context.Context, session, pane string, li
 // cmd/exit/stderr/duration" instrumentation requirement; logging here
 // (rather than in each exported method) covers FocusedPane, PaneRun, and
 // PaneRead uniformly with one code path.
-func run(ctx context.Context, logger *slog.Logger, session string, args ...string) ([]byte, error) {
-	fullArgs := append([]string{"--session", session}, args...)
+func runArgs(ctx context.Context, logger *slog.Logger, prefix []string, args ...string) ([]byte, error) {
+	fullArgs := append(append([]string{}, prefix...), args...)
 	command := "herdr " + strings.Join(fullArgs, " ")
 	cmd := exec.CommandContext(ctx, "herdr", fullArgs...)
 	var stdout, stderr strings.Builder

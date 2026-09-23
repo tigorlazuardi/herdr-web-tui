@@ -23,6 +23,10 @@ type previewHerdrClient struct {
 	ctx        context.Context
 }
 
+func (f *previewHerdrClient) ActiveMachine(context.Context) (string, error) { return "", nil }
+
+func (f *previewHerdrClient) For(machine string) herdrclient.HerdrClient { return f }
+
 func (f *previewHerdrClient) FocusedPane(ctx context.Context, session string) (*herdrclient.PaneInfo, error) {
 	f.ctx, f.session = ctx, session
 	return f.pane, f.focusedErr

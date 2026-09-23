@@ -180,6 +180,126 @@ func TestExecHerdrClient_PaneSendInput_CancellationClosesStalledSocket(t *testin
 	}
 }
 
+// setupArgCapturingHerdr installs a fake herdr binary that answers
+// `machine list --json` from $HERDR_MACHINES_JSON and records every other
+// invocation's argv, one argument per line, into $HERDR_ARGS. POSIX-only:
+// the shell script keeps the CLI boundary test small (same trade-off as
+// TestExecHerdrClient_PaneRead).
+func setupArgCapturingHerdr(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled herdr shell executable requires POSIX shell")
+	}
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	herdrPath := filepath.Join(dir, "herdr")
+	const script = "#!/bin/sh\nif [ \"$1\" = \"machine\" ]; then\n  printf '%s' \"$HERDR_MACHINES_JSON\"\n  exit ${HERDR_MACHINES_EXIT:-0}\nfi\nprintf '%s\\n' \"$@\" > \"$HERDR_ARGS\"\n"
+	if err := os.WriteFile(herdrPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("HERDR_ARGS", argsPath)
+	return argsPath
+}
+
+func readArgsLines(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+}
+
+func TestActiveMachine_ReturnsEnabledSelectedProfile(t *testing.T) {
+	const catalog = `[
+ {"id":"m1","label":"A","target":"a@box","session":"default","enabled":true,"selected":false},
+ {"id":"m2","label":"B","target":"b@box","session":"default","enabled":true,"selected":true}
+]`
+	t.Setenv("HERDR_MACHINES_JSON", catalog)
+	setupArgCapturingHerdr(t)
+
+	machine, err := NewExecHerdrClient(nil).ActiveMachine(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveMachine: %v", err)
+	}
+	if machine != "m2" {
+		t.Fatalf("machine = %q, want m2", machine)
+	}
+}
+
+func TestActiveMachine_EmptyWhenNothingSelectedOrDisabled(t *testing.T) {
+	for name, catalog := range map[string]string{
+		"none selected":         `[{"id":"m1","enabled":true,"selected":false}]`,
+		"selected but disabled": `[{"id":"m1","enabled":false,"selected":true}]`,
+		"empty catalog":         `[]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HERDR_MACHINES_JSON", catalog)
+			setupArgCapturingHerdr(t)
+			machine, err := NewExecHerdrClient(nil).ActiveMachine(context.Background())
+			if err != nil || machine != "" {
+				t.Fatalf("machine=%q err=%v, want empty/local", machine, err)
+			}
+		})
+	}
+}
+
+func TestActiveMachine_FailsClosedOnExecOrParseFailure(t *testing.T) {
+	t.Setenv("HERDR_MACHINES_JSON", `{`)
+	setupArgCapturingHerdr(t)
+	if _, err := NewExecHerdrClient(nil).ActiveMachine(context.Background()); err == nil || !strings.Contains(err.Error(), "parse machine list") {
+		t.Fatalf("expected parse failure, got %v", err)
+	}
+
+	t.Setenv("HERDR_MACHINES_JSON", ``)
+	t.Setenv("HERDR_MACHINES_EXIT", "1")
+	if _, err := NewExecHerdrClient(nil).ActiveMachine(context.Background()); err == nil {
+		t.Fatal("expected exec failure to surface")
+	}
+}
+
+func TestMachineRoutedClient_MachinePrefixAndAtomicTextArgv(t *testing.T) {
+	t.Setenv("HERDR_MACHINES_JSON", `{"id":"m2","enabled":true,"selected":true}`)
+	argsPath := setupArgCapturingHerdr(t)
+	client := NewExecHerdrClient(nil).For("m2")
+
+	if err := client.PaneRun(context.Background(), "ignored", "w1:p1", "hello spaced  text"); err != nil {
+		t.Fatalf("PaneRun: %v", err)
+	}
+	// The text must stay one argv element: --machine routing is argv-based
+	// (no shell), so spaces inside the prompt text cannot be re-split.
+	want := []string{"--machine", "m2", "pane", "run", "w1:p1", "hello spaced  text"}
+	if got := readArgsLines(t, argsPath); !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestMachineRoutedClient_PaneSendInputRejectedBeforeIO(t *testing.T) {
+	client := NewExecHerdrClient(nil).For("m2")
+	err := client.PaneSendInput(context.Background(), "ignored", "w1:p1", "hello", "ctrl+enter")
+	if err == nil || !strings.Contains(err.Error(), "local-only") {
+		t.Fatalf("expected local-only rejection, got %v", err)
+	}
+}
+
+func TestMachineRoutedClient_FocusedPaneFailureIsUnreachable(t *testing.T) {
+	t.Setenv("HERDR_MACHINES_JSON", `{"id":"m2","enabled":true,"selected":true}`)
+	t.Setenv("HERDR_FAIL", "1")
+	dir := t.TempDir()
+	herdrPath := filepath.Join(dir, "herdr")
+	script := "#!/bin/sh\nif [ \"$1\" = \"machine\" ]; then printf '{}' ; exit 0; fi\nprintf 'ssh failed\\n' >&2\nexit 1\n"
+	if err := os.WriteFile(herdrPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	_, err := NewExecHerdrClient(nil).For("m2").FocusedPane(context.Background(), "default")
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("expected ErrUnreachable for routed focus failure, got %v", err)
+	}
+}
+
 func TestExecHerdrClient_PaneRead_UsesVisibleTextAndPreservesOutput(t *testing.T) {
 	// ponytail: POSIX script keeps CLI boundary test small; use a Go helper executable if Windows support is needed.
 	if runtime.GOOS == "windows" {
