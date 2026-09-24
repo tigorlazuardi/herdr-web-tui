@@ -193,7 +193,7 @@ func setupArgCapturingHerdr(t *testing.T) string {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args")
 	herdrPath := filepath.Join(dir, "herdr")
-	const script = "#!/bin/sh\nif [ \"$1\" = \"machine\" ]; then\n  printf '%s' \"$HERDR_MACHINES_JSON\"\n  exit ${HERDR_MACHINES_EXIT:-0}\nfi\nprintf '%s\\n' \"$@\" > \"$HERDR_ARGS\"\n"
+	const script = "#!/bin/sh\nif [ \"$1\" = \"machine\" ]; then\n  printf '%s' \"$HERDR_MACHINES_JSON\"\n  exit ${HERDR_MACHINES_EXIT:-0}\nfi\nprintf '%s\\n' \"$@\" > \"$HERDR_ARGS\"\nif [ -n \"$HERDR_FAKE_STDOUT\" ]; then printf '%s' \"$HERDR_FAKE_STDOUT\"; fi\n"
 	if err := os.WriteFile(herdrPath, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +280,26 @@ func TestMachineRoutedClient_PaneSendInputRejectedBeforeIO(t *testing.T) {
 	err := client.PaneSendInput(context.Background(), "ignored", "w1:p1", "hello", "ctrl+enter")
 	if err == nil || !strings.Contains(err.Error(), "local-only") {
 		t.Fatalf("expected local-only rejection, got %v", err)
+	}
+}
+
+func TestMachineRoutedClient_FocusedPaneResolvesOnRemote(t *testing.T) {
+	t.Setenv("HERDR_MACHINES_JSON", `{"id":"m2","enabled":true,"selected":true}`)
+	t.Setenv("HERDR_FAKE_STDOUT", `{"id":"x","result":{"pane":{"pane_id":"w4:p1"}}}`)
+	argsPath := setupArgCapturingHerdr(t)
+
+	pane, err := NewExecHerdrClient(nil).For("m2").FocusedPane(context.Background(), "ignored")
+	if err != nil {
+		t.Fatalf("FocusedPane: %v", err)
+	}
+	if pane.PaneID != "w4:p1" {
+		t.Fatalf("pane = %q, want w4:p1", pane.PaneID)
+	}
+	// Resolution must run on the remote server (--machine prefix), never
+	// against the stale local focus.
+	want := []string{"--machine", "m2", "pane", "current"}
+	if got := readArgsLines(t, argsPath); !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
 	}
 }
 

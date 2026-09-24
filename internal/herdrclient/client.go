@@ -176,12 +176,22 @@ func (m machineRoutedClient) For(machine string) HerdrClient {
 func (m machineRoutedClient) FocusedPane(ctx context.Context, session string) (*PaneInfo, error) {
 	// session is intentionally ignored: a machine profile binds its own
 	// remote session (herdr rejects combining --remote routing with
-	// --session, and the saved profile already names the session).
-	pane, err := m.parent.FocusedPane(ctx, session)
+	// --session, and the saved profile already names the session). The
+	// focused pane MUST be resolved on the remote server — the local
+	// server's focus is stale while a machine view is active, which is the
+	// exact wrong-target bug this routing exists to fix.
+	out, err := m.parent.runRoutedOut(ctx, m.machine, "pane", "current")
 	if err != nil {
 		return nil, errors.Wrapf(ErrUnreachable, "ssh machine %s: %s", m.machine, err)
 	}
-	return pane, nil
+	var resp paneCurrentResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, errors.Wrap(err, "parse pane current response")
+	}
+	if resp.Result.Pane.PaneID == "" {
+		return nil, errors.New("herdr reported no focused pane")
+	}
+	return &PaneInfo{PaneID: resp.Result.Pane.PaneID}, nil
 }
 
 func (m machineRoutedClient) PaneRun(ctx context.Context, session, pane, text string) error {
@@ -201,8 +211,12 @@ func (m machineRoutedClient) PaneRead(ctx context.Context, session, pane string,
 }
 
 func (c *ExecHerdrClient) runRouted(ctx context.Context, machine string, args ...string) error {
-	_, err := runArgs(ctx, c.logger, []string{"--machine", machine}, args...)
+	_, err := c.runRoutedOut(ctx, machine, args...)
 	return err
+}
+
+func (c *ExecHerdrClient) runRoutedOut(ctx context.Context, machine string, args ...string) ([]byte, error) {
+	return runArgs(ctx, c.logger, []string{"--machine", machine}, args...)
 }
 
 func (c *ExecHerdrClient) readRouted(ctx context.Context, machine, pane string, lines int) (string, error) {
