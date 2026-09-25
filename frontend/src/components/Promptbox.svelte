@@ -214,7 +214,13 @@
   })
 </script>
 
-<div class="promptbox" class:hidden>
+<div class="promptbox" class:hidden aria-busy={sending}>
+  {#if sending}
+    <!-- Indeterminate send progress: upload + server-side machine sync can
+         take a while on big attachments; a thin looping bar beats a dead
+         pause with no feedback. -->
+    <div class="send-progress" role="progressbar" aria-label="Sending"></div>
+  {/if}
   {#if error}
     <div class="error" role="alert">
       <AlertTriangle size={16} aria-hidden="true" />
@@ -329,12 +335,59 @@
 
 <style>
   .promptbox {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
     padding: 0.5rem 0.75rem;
     background: var(--promptbox-bg, #0f172a);
     border-top: 1px solid var(--border, #1e293b);
+  }
+
+  /* Thin indeterminate bar pinned to the promptbox top edge; visible only
+     while a submit is in flight (upload + remote attachment sync). */
+  .send-progress {
+    position: absolute;
+    top: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    overflow: hidden;
+    border-radius: 2px 2px 0 0;
+    background: color-mix(in srgb, var(--sve-color-primary, #38bdf8) 20%, transparent);
+  }
+
+  .send-progress::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 40%;
+    background: var(--sve-color-primary, #38bdf8);
+    animation: send-progress-slide 1.1s ease-in-out infinite;
+  }
+
+  @keyframes send-progress-slide {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .send-progress::before {
+      animation: send-progress-pulse 1.6s ease-in-out infinite;
+    }
+  }
+
+  @keyframes send-progress-pulse {
+    from {
+      opacity: 0.35;
+    }
+    to {
+      opacity: 1;
+    }
   }
 
   /* keys/termux mode: hide visually, keep mounted (see the `hidden` prop's
