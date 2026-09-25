@@ -214,17 +214,17 @@ func readArgsLines(t *testing.T, path string) []string {
 func TestActiveMachine_ReturnsEnabledSelectedProfile(t *testing.T) {
 	const catalog = `[
  {"id":"m1","label":"A","target":"a@box","session":"default","enabled":true,"selected":false},
- {"id":"m2","label":"B","target":"b@box","session":"default","enabled":true,"selected":true}
+ {"id":"m2","label":"B","target":"tigor@m2box","session":"default","enabled":true,"selected":true}
 ]`
 	t.Setenv("HERDR_MACHINES_JSON", catalog)
 	setupArgCapturingHerdr(t)
 
-	machine, err := NewExecHerdrClient(nil).ActiveMachine(context.Background())
+	profile, err := NewExecHerdrClient(nil).ActiveMachine(context.Background())
 	if err != nil {
 		t.Fatalf("ActiveMachine: %v", err)
 	}
-	if machine != "m2" {
-		t.Fatalf("machine = %q, want m2", machine)
+	if profile.ID != "m2" || profile.Target != "tigor@m2box" {
+		t.Fatalf("profile = %+v, want id m2 target tigor@m2box", profile)
 	}
 }
 
@@ -237,9 +237,9 @@ func TestActiveMachine_EmptyWhenNothingSelectedOrDisabled(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HERDR_MACHINES_JSON", catalog)
 			setupArgCapturingHerdr(t)
-			machine, err := NewExecHerdrClient(nil).ActiveMachine(context.Background())
-			if err != nil || machine != "" {
-				t.Fatalf("machine=%q err=%v, want empty/local", machine, err)
+			profile, err := NewExecHerdrClient(nil).ActiveMachine(context.Background())
+			if err != nil || profile.ID != "" || profile.Target != "" {
+				t.Fatalf("profile=%+v err=%v, want empty/local", profile, err)
 			}
 		})
 	}

@@ -120,24 +120,36 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// a machine view is active. Detection failure degrades to Local (older
 	// herdr lacks `machine list --json`); Local focus then resolves exactly
 	// as before.
-	machine, err := h.herdr.ActiveMachine(ctx)
+	profile, err := h.herdr.ActiveMachine(ctx)
 	if err != nil {
 		h.logger.WarnContext(ctx, "send: machine selection unresolved; routing to Local",
 			slog.String("error", err.Error()))
-		machine = ""
+		profile = herdrclient.MachineProfile{}
 	}
-	routed := h.herdr.For(machine)
+	routed := h.herdr.For(profile.ID)
 
-	if machine != "" && key != submitEnter {
+	if profile.ID != "" && key != submitEnter {
 		// pane.send_input dials the session socket, which lives on the
 		// remote host; no atomic remote text+modified-key primitive exists
 		// yet. Fail closed instead of partially injecting text and key as
 		// two sequential calls.
 		h.logger.WarnContext(ctx, "send: modified submit toward ssh machine rejected",
-			slog.String("machine", machine), slog.String("submit_key", string(key)))
+			slog.String("machine", profile.ID), slog.String("submit_key", string(key)))
 		writeSendError(w, http.StatusBadRequest,
-			fmt.Sprintf("submit key %q is not supported toward ssh machine %q yet; use Enter", string(key), machine))
+			fmt.Sprintf("submit key %q is not supported toward ssh machine %q yet; use Enter", string(key), profile.ID))
 		return
+	}
+
+	// Machine targets read attachments from their own filesystem (strictly
+	// drop-path contract), so stage every file onto the remote host before
+	// anything is typed. A sync failure aborts here with nothing injected.
+	if profile.ID != "" && len(saved) > 0 {
+		if err := artifact.SyncToRemote(ctx, profile.Target, h.stagingDir, saved); err != nil {
+			h.logger.ErrorContext(ctx, "send: attachment sync to machine failed",
+				slog.String("machine", profile.ID), slog.Int("file_count", len(saved)), slog.String("error", err.Error()))
+			writeSendError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	start := time.Now()
@@ -162,7 +174,7 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	duration := time.Since(start)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "send: inject failed",
-			slog.String("session", session), slog.String("machine", machine), slog.String("pane", pane.PaneID),
+			slog.String("session", session), slog.String("machine", profile.ID), slog.String("pane", pane.PaneID),
 			slog.String("submit_key", string(key)),
 			slog.Duration("duration", duration), slog.String("error", err.Error()),
 		)
@@ -171,7 +183,7 @@ func (h *sendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.InfoContext(ctx, "send: inject ok",
-		slog.String("session", session), slog.String("machine", machine), slog.String("pane", pane.PaneID),
+		slog.String("session", session), slog.String("machine", profile.ID), slog.String("pane", pane.PaneID),
 		slog.String("submit_key", string(key)), slog.Duration("duration", duration),
 	)
 	writeJSON(w, http.StatusOK, sendResponse{OK: true})

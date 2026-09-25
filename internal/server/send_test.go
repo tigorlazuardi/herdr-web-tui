@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ type fakeHerdrClient struct {
 
 	// activeMachine is what ActiveMachine reports; For(machine) records the
 	// machine the handler routed to so tests can assert target selection.
-	activeMachine string
+	activeMachine herdrclient.MachineProfile
 	routedMachine string
 
 	// calls records every final injection invocation, in order, so a test can
@@ -39,7 +40,7 @@ type fakeHerdrClient struct {
 	calls []string
 }
 
-func (f *fakeHerdrClient) ActiveMachine(context.Context) (string, error) {
+func (f *fakeHerdrClient) ActiveMachine(context.Context) (herdrclient.MachineProfile, error) {
 	return f.activeMachine, nil
 }
 
@@ -181,7 +182,7 @@ func TestSend_ModifiedSubmit_UsesOneAtomicSendInput(t *testing.T) {
 }
 
 func TestSend_MachineSelected_RoutesThroughMachineClient(t *testing.T) {
-	herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}, activeMachine: "m2"}
+	herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}, activeMachine: herdrclient.MachineProfile{ID: "m2", Target: "tigor@box"}}
 	h := newSendHandler(herdr, t.TempDir(), silentLogger())
 	tmpl := &artifact.Template{Segments: []artifact.Segment{{Text: "hello"}}}
 	body, ctype := buildMultipartWithSubmit(t, tmpl, "default", "enter", nil)
@@ -205,7 +206,7 @@ func TestSend_MachineSelected_RoutesThroughMachineClient(t *testing.T) {
 func TestSend_MachineSelected_ModifiedSubmit_Returns400BeforeInject(t *testing.T) {
 	for _, key := range []string{"ctrl-enter", "alt-enter"} {
 		t.Run(key, func(t *testing.T) {
-			herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}, activeMachine: "m2"}
+			herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}, activeMachine: herdrclient.MachineProfile{ID: "m2", Target: "tigor@box"}}
 			h := newSendHandler(herdr, t.TempDir(), silentLogger())
 			tmpl := &artifact.Template{Segments: []artifact.Segment{{Text: "hello"}}}
 			body, ctype := buildMultipartWithSubmit(t, tmpl, "default", key, nil)
@@ -225,6 +226,57 @@ func TestSend_MachineSelected_ModifiedSubmit_Returns400BeforeInject(t *testing.T
 				t.Fatalf("expected ssh-machine explanation in body, got %s", rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestSend_MachineSelected_WithAttachment_SyncsThenInjectsRemotePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ssh shell executable requires POSIX shell")
+	}
+	// Fake ssh records the remote command and drops stdin into a sandbox
+	// root so the test can assert the staged bytes landed remotely.
+	dir := t.TempDir()
+	callsPath := filepath.Join(dir, "calls")
+	remoteRoot := filepath.Join(dir, "remote")
+	sshScript := "#!/bin/sh\nPATH=/usr/bin:/bin\nprintf '%s\\n' \"$*\" >> \"$SSH_CALLS\"\nremotepath=${2##*cat > }\nif [ -n \"$remotepath\" ]; then mkdir -p \"$REMOTE_ROOT${remotepath%/*}\" && cat > \"$REMOTE_ROOT$remotepath\"; fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(sshScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SSH_CALLS", callsPath)
+	t.Setenv("REMOTE_ROOT", remoteRoot)
+
+	herdr := &fakeHerdrClient{focusedPane: &herdrclient.PaneInfo{PaneID: "w1:p1"}, activeMachine: herdrclient.MachineProfile{ID: "m2", Target: "tigor@box"}}
+	staging := t.TempDir()
+	h := newSendHandler(herdr, staging, silentLogger())
+	tmpl := &artifact.Template{Segments: []artifact.Segment{{File: "f1"}}}
+	body, ctype := buildMultipartWithSubmit(t, tmpl, "default", "enter", map[string]string{"f1": "PNGDATA"})
+	req := httptest.NewRequest(http.MethodPost, "/send", body)
+	req.Header.Set("Content-Type", ctype)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if herdr.routedMachine != "m2" {
+		t.Fatalf("expected routing through machine m2, routed to %q", herdr.routedMachine)
+	}
+	if len(herdr.calls) != 1 || !strings.Contains(herdr.calls[0], staging+"/") {
+		t.Fatalf("expected one inject referencing the staged path, got %v", herdr.calls)
+	}
+	// The exact staged file must exist under the fake remote root: same
+	// absolute path, bytes intact.
+	remoteCopy := filepath.Join(remoteRoot, herdr.calls[0][len("default/w1:p1: "):])
+	got, err := os.ReadFile(strings.TrimSpace(remoteCopy))
+	if err != nil {
+		calls, _ := os.ReadFile(callsPath)
+		entries, _ := os.ReadDir(remoteRoot)
+		t.Fatalf("remote copy missing: %v\ncalls=%q remoteRoot entries=%v", err, string(calls), entries)
+	}
+	if string(got) != "PNGDATA" {
+		t.Fatalf("remote bytes = %q, want PNGDATA", got)
 	}
 }
 

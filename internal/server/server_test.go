@@ -29,7 +29,7 @@ import (
 // every method fails loudly if accidentally called.
 type noopHerdrClient struct{}
 
-func (noopHerdrClient) ActiveMachine(context.Context) (string, error) {
+func (noopHerdrClient) ActiveMachine(context.Context) (herdrclient.MachineProfile, error) {
 	panic("noopHerdrClient: unexpected call")
 }
 
