@@ -47,15 +47,14 @@ type PaneInfo struct {
 // stateless / safe for concurrent use.
 type HerdrClient interface {
 	// ActiveMachine returns the SSH machine profile Herdr reports as the
-	// operator's current client selection (enabled + selected); an empty ID
-	// means the client is on Local. The target rides along so send flows can
-	// stage attachments onto the remote host without a second catalog read.
-	// Herdr 0.9 machine selection is host-wide client state shared by every
-	// attached client of this user — the same "last selection wins"
-	// semantics as the server-wide focused pane. Detection failure (for
-	// example an older herdr without `machine list --json`) returns an
-	// error; callers decide whether to degrade to Local routing.
-	ActiveMachine(ctx context.Context) (MachineProfile, error)
+	// operator's current client selection (enabled + selected), or "" when
+	// the client is on Local. Herdr 0.9 machine selection is host-wide
+	// client state shared by every attached client of this user — the same
+	// "last selection wins" semantics as the server-wide focused pane.
+	// Detection failure (for example an older herdr without
+	// `machine list --json`) returns an error; callers decide whether to
+	// degrade to Local routing.
+	ActiveMachine(ctx context.Context) (string, error)
 
 	// For returns a client routed to the given machine profile ("" routes
 	// to Local exactly like the receiver). Routed calls drop --session and
@@ -117,19 +116,10 @@ type paneCurrentResponse struct {
 	} `json:"result"`
 }
 
-// MachineProfile identifies one saved SSH machine: ID drives `herdr
-// --machine <id>` routing; Target is the raw ssh destination (used to
-// stage attachments onto the remote host).
-type MachineProfile struct {
-	ID     string
-	Target string
-}
-
 // machineListProfile is one entry of `herdr machine list --json` (herdr
 // 0.9.0): only the fields ActiveMachine consumes.
 type machineListProfile struct {
 	ID       string `json:"id"`
-	Target   string `json:"target"`
 	Enabled  bool   `json:"enabled"`
 	Selected bool   `json:"selected"`
 }
@@ -137,21 +127,21 @@ type machineListProfile struct {
 // ActiveMachine implements HerdrClient.ActiveMachine via the supported CLI
 // surface rather than parsing herdr's internal state files: the selected
 // flag comes straight from `herdr machine list --json`.
-func (c *ExecHerdrClient) ActiveMachine(ctx context.Context) (MachineProfile, error) {
+func (c *ExecHerdrClient) ActiveMachine(ctx context.Context) (string, error) {
 	out, err := runArgs(ctx, c.logger, nil, "machine", "list", "--json")
 	if err != nil {
-		return MachineProfile{}, err
+		return "", err
 	}
 	var profiles []machineListProfile
 	if err := json.Unmarshal(out, &profiles); err != nil {
-		return MachineProfile{}, errors.Wrap(err, "parse machine list response")
+		return "", errors.Wrap(err, "parse machine list response")
 	}
 	for _, p := range profiles {
 		if p.Enabled && p.Selected {
-			return MachineProfile{ID: p.ID, Target: p.Target}, nil
+			return p.ID, nil
 		}
 	}
-	return MachineProfile{}, nil
+	return "", nil
 }
 
 // For implements HerdrClient.For. The zero machine keeps the receiver so
@@ -172,7 +162,7 @@ type machineRoutedClient struct {
 	machine string
 }
 
-func (m machineRoutedClient) ActiveMachine(ctx context.Context) (MachineProfile, error) {
+func (m machineRoutedClient) ActiveMachine(ctx context.Context) (string, error) {
 	return m.parent.ActiveMachine(ctx)
 }
 

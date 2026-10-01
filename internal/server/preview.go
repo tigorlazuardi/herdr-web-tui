@@ -37,12 +37,12 @@ func (h *previewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	session := sanitizeSession(strings.TrimPrefix(r.URL.Path, "/api/pane-preview/"))
 	// Follow the operator's machine selection so the preview shows the pane
 	// the browser is actually rendering (same routing rationale as /send).
-	profile, err := h.herdr.ActiveMachine(r.Context())
+	machine, err := h.herdr.ActiveMachine(r.Context())
 	if err != nil {
 		h.logger.WarnContext(r.Context(), "preview: machine selection unresolved; routing to Local", slog.String("error", err.Error()))
-		profile = herdrclient.MachineProfile{}
+		machine = ""
 	}
-	routed := h.herdr.For(profile.ID)
+	routed := h.herdr.For(machine)
 	start := time.Now()
 	pane, err := routed.FocusedPane(r.Context(), session)
 	if err != nil {
